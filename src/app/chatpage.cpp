@@ -11,6 +11,7 @@
 #include "treeitem.h"
 #include "treewidget.h"
 #include "themeloader.h"
+#include "windowtheme.h"
 #include "textdocument.h"
 #include "pluginloader.h"
 #include "textbrowser.h"
@@ -22,41 +23,18 @@
 #include "overlay.h"
 #include "finder.h"
 #include "mainwindow.h"
+#include "scrollbarstyle.h"
 #include "messagehandler.h"
-#include "messageformatter.h"
 #include <QCoreApplication>
 #include <IrcCommandParser>
 #include <IrcBufferModel>
-#include <QStyleFactory>
 #include <IrcConnection>
 #include <QStringList>
-#include <QProxyStyle>
 #include <QScrollBar>
 #include <IrcChannel>
 #include <IrcBuffer>
 #include <QSettings>
 #include <Irc>
-
-class ProxyStyle : public QProxyStyle
-{
-public:
-    static ProxyStyle* instance()
-    {
-        static ProxyStyle style;
-        return &style;
-    }
-
-    int styleHint(StyleHint hint, const QStyleOption *option = 0,
-                  const QWidget *widget = 0, QStyleHintReturn *returnData = 0) const
-    {
-        if (hint == QStyle::SH_ScrollBar_Transient)
-            return 1;
-        return QProxyStyle::styleHint(hint, option, widget, returnData);
-    }
-
-private:
-    ProxyStyle() : QProxyStyle(QStyleFactory::create("fusion")) { }
-};
 
 ChatPage::ChatPage(QWidget* parent) : QSplitter(parent)
 {
@@ -67,8 +45,7 @@ ChatPage::ChatPage(QWidget* parent) : QSplitter(parent)
     addWidget(d.splitView);
 
 #if QT_VERSION >= 0x050300 && !defined(Q_OS_MAC)
-    d.treeWidget->horizontalScrollBar()->setStyle(ProxyStyle::instance());
-    d.treeWidget->verticalScrollBar()->setStyle(ProxyStyle::instance());
+    d.treeWidget->verticalScrollBar()->setStyle(ScrollBarStyle::expanding());
 #endif
 
     connect(d.treeWidget, SIGNAL(bufferClosed(IrcBuffer*)), this, SLOT(closeBuffer(IrcBuffer*)));
@@ -79,6 +56,7 @@ ChatPage::ChatPage(QWidget* parent) : QSplitter(parent)
 
     connect(d.splitView, SIGNAL(viewAdded(BufferView*)), this, SLOT(addView(BufferView*)));
     connect(d.splitView, SIGNAL(viewRemoved(BufferView*)), this, SLOT(removeView(BufferView*)));
+    connect(d.splitView, SIGNAL(currentBufferChanged(IrcBuffer*)), this, SLOT(onCurrentBufferChanged(IrcBuffer*)));
     connect(d.splitView, SIGNAL(currentViewChanged(BufferView*,BufferView*)), this, SLOT(onCurrentViewChanged(BufferView*,BufferView*)));
 
     setStretchFactor(1, 1);
@@ -121,9 +99,9 @@ void ChatPage::setTheme(const QString& theme)
         d.theme = ThemeLoader::instance()->theme(theme);
         foreach (TextDocument* doc, d.documents)
             setupDocument(doc);
-
-        QString css = d.theme.style();
-        window()->setStyleSheet(css);
+        foreach (BufferView* view, d.splitView->views())
+            view->titleBar()->setStyleSheet(d.theme.style());
+        WindowTheme::setTheme(window(), d.theme);
     }
 }
 
@@ -174,6 +152,16 @@ void ChatPage::restoreState(const QByteArray& data)
         QSplitter::restoreState(state.value("splitter").toByteArray());
     if (state.contains("views"))
         d.splitView->restoreState(state.value("views").toByteArray());
+
+    // restore server buffers
+    QList<IrcConnection*> connections = findChildren<IrcConnection*>();
+    foreach (IrcConnection* connection, connections) {
+        IrcBufferModel* model = connection->findChild<IrcBufferModel*>();
+        if (model) {
+            foreach (IrcBuffer* buffer, model->buffers())
+                d.splitView->addBuffer(buffer);
+        }
+    }
 }
 
 bool ChatPage::commandFilter(IrcCommand* command)
@@ -202,8 +190,13 @@ bool ChatPage::commandFilter(IrcCommand* command)
                 IrcCommand* command = IrcCommand::createMessage(target, message);
                 if (buffer->sendCommand(command)) {
                     IrcConnection* connection = buffer->connection();
-                    buffer->receiveMessage(command->toMessage(connection->nickName(), connection));
+                    IrcMessage* msg = command->toMessage(connection->nickName(), connection);
+                    if (msg) {
+                        buffer->receiveMessage(msg);
+                        msg->deleteLater();
+                    }
                 }
+                d.splitView->currentView()->textInput()->clear();
                 d.splitView->setCurrentBuffer(buffer);
                 return true;
             }
@@ -215,9 +208,14 @@ bool ChatPage::commandFilter(IrcCommand* command)
                 IrcCommand* command = IrcCommand::createMessage(target, message);
                 if (buffer->sendCommand(command)) {
                     IrcConnection* connection = buffer->connection();
-                    buffer->receiveMessage(command->toMessage(connection->nickName(), connection));
+                    IrcMessage* msg = command->toMessage(connection->nickName(), connection);
+                    if (msg) {
+                        buffer->receiveMessage(msg);
+                        msg->deleteLater();
+                    }
                 }
             }
+            d.splitView->currentView()->textInput()->clear();
             d.splitView->setCurrentBuffer(buffer);
             return true;
         } else if (cmd == "SET") {
@@ -247,11 +245,11 @@ void ChatPage::addConnection(IrcConnection* connection)
 
     connect(bufferModel, SIGNAL(added(IrcBuffer*)), this, SLOT(addBuffer(IrcBuffer*)));
     connect(connection, SIGNAL(socketError(QAbstractSocket::SocketError)), this, SLOT(onSocketError()));
+    connect(connection, SIGNAL(secureError()), this, SLOT(onSecureError()));
 
     MessageHandler* handler = new MessageHandler(bufferModel);
     handler->setDefaultBuffer(serverBuffer);
     handler->setCurrentBuffer(serverBuffer);
-    connect(d.splitView, SIGNAL(currentBufferChanged(IrcBuffer*)), handler, SLOT(setCurrentBuffer(IrcBuffer*)));
 
     addBuffer(serverBuffer);
     if (!d.treeWidget->currentBuffer())
@@ -333,27 +331,21 @@ void ChatPage::setupDocument(TextDocument* document)
 
     document->setTimeStampFormat(d.timestamp);
     document->setStyleSheet(d.theme.style());
-//    document->formatter()->setDetailed(d.showDetails);
-//    document->formatter()->setStripNicks(!d.showDetails);
 
     if (!document->isClone()) {
-        connect(document, SIGNAL(messageMissed(IrcMessage*)), this, SIGNAL(messageMissed(IrcMessage*)));
         connect(document, SIGNAL(messageHighlighted(IrcMessage*)), this, SIGNAL(messageHighlighted(IrcMessage*)));
+        connect(document, SIGNAL(privateMessageReceived(IrcMessage*)), this, SIGNAL(privateMessageReceived(IrcMessage*)));
     }
 }
 
 void ChatPage::addView(BufferView* view)
 {
     TitleBar* bar = view->titleBar();
-    QTextDocument* doc = bar->findChild<QTextDocument*>();
-    if (doc)
-        doc->setDefaultStyleSheet(d.theme.style());
+    bar->setStyleSheet(d.theme.style());
 
 #if QT_VERSION >= 0x050300 && !defined(Q_OS_MAC)
-    view->textBrowser()->horizontalScrollBar()->setStyle(ProxyStyle::instance());
-    view->textBrowser()->verticalScrollBar()->setStyle(ProxyStyle::instance());
-    view->listView()->horizontalScrollBar()->setStyle(ProxyStyle::instance());
-    view->listView()->verticalScrollBar()->setStyle(ProxyStyle::instance());
+    view->textBrowser()->verticalScrollBar()->setStyle(ScrollBarStyle::expanding());
+    view->listView()->verticalScrollBar()->setStyle(ScrollBarStyle::expanding());
 #endif
 
     view->textInput()->setParser(createParser(view));
@@ -369,6 +361,13 @@ void ChatPage::addView(BufferView* view)
 void ChatPage::removeView(BufferView* view)
 {
     PluginLoader::instance()->viewRemoved(view);
+}
+
+void ChatPage::onCurrentBufferChanged(IrcBuffer* buffer)
+{
+    MessageHandler* handler = buffer->model()->findChild<MessageHandler*>();
+    if (handler)
+        handler->setCurrentBuffer(buffer);
 }
 
 void ChatPage::onCurrentViewChanged(BufferView* current, BufferView* previous)
@@ -395,6 +394,24 @@ void ChatPage::onSocketError()
                 TreeItem* item = d.treeWidget->connectionItem(connection);
                 if (item && d.treeWidget->currentItem() != item)
                     d.treeWidget->highlightItem(item);
+            }
+        }
+    }
+}
+
+void ChatPage::onSecureError()
+{
+    IrcConnection* connection = qobject_cast<IrcConnection*>(sender());
+    if (connection && connection->status() == IrcConnection::Error) {
+        IrcBufferModel* model = connection->findChild<IrcBufferModel*>(); // TODO
+        if (model) {
+            IrcBuffer* buffer = model->get(0);
+            if (buffer) {
+                QStringList params = QStringList() << connection->nickName() << tr("Unable to establish secure connection.");
+                IrcMessage* message = IrcMessage::fromParameters(buffer->title(), QString::number(Irc::ERR_UNKNOWNERROR), params, connection);
+                foreach (TextDocument* doc, buffer->findChildren<TextDocument*>())
+                    doc->receiveMessage(message);
+                delete message;
             }
         }
     }

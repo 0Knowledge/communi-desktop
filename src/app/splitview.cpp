@@ -478,6 +478,7 @@ void SplitView::addZoomActions(QMenu* menu, BufferView* view)
     zoomOutAction->setData(QVariant::fromValue(view));
 
     QAction* resetZoomAction = menu->addAction(tr("Reset zoom"), this, SLOT(resetZoom()), QKeySequence(tr("Ctrl+0")));
+    resetZoomAction->setEnabled(view->textBrowser()->isZoomed());
     resetZoomAction->setShortcutContext(Qt::WidgetShortcut);
     resetZoomAction->setData(QVariant::fromValue(view));
 }
@@ -514,7 +515,7 @@ void SplitView::showContextMenu(const QPoint& pos)
         QAction* restoreViews = 0;
 
         QSplitter* splitter = qobject_cast<QSplitter*>(browser->parentWidget());
-        if (splitter && !anchor.startsWith("nick:")) {
+        if (splitter && anchor.isEmpty()) {
             BufferView* view = qobject_cast<BufferView*>(splitter->parentWidget());
             if (view) {
                 menu->addSeparator();

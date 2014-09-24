@@ -17,7 +17,6 @@
 #include <IrcCommandParser>
 #include <IrcBufferModel>
 #include <IrcConnection>
-#include <IrcCompleter>
 #include <QMessageBox>
 #include <QSettings>
 #include <QCheckBox>
@@ -106,7 +105,10 @@ bool TextInput::event(QEvent* event)
     if (event->type() == QEvent::KeyPress) {
         switch (static_cast<QKeyEvent*>(event)->key()) {
         case Qt::Key_Tab:
-            tryComplete();
+            tryComplete(IrcCompleter::Forward);
+            return true;
+        case Qt::Key_Backtab:
+            tryComplete(IrcCompleter::Backward);
             return true;
         case Qt::Key_Up:
             goBackward();
@@ -252,8 +254,13 @@ void TextInput::sendInput()
             if (cmd) {
                 cmd->setProperty("TextInput", true);
                 b->sendCommand(cmd);
-                if (cmd->type() == IrcCommand::Message || cmd->type() == IrcCommand::Notice || cmd->type() == IrcCommand::CtcpAction)
-                    b->receiveMessage(cmd->toMessage(c->nickName(), c));
+                if (cmd->type() == IrcCommand::Message || cmd->type() == IrcCommand::Notice || cmd->type() == IrcCommand::CtcpAction) {
+                    IrcMessage* msg = cmd->toMessage(c->nickName(), c);
+                    if (msg) {
+                        b->receiveMessage(msg);
+                        msg->deleteLater();
+                    }
+                }
             } else {
                 error = true;
             }
@@ -263,9 +270,9 @@ void TextInput::sendInput()
         clear();
 }
 
-void TextInput::tryComplete()
+void TextInput::tryComplete(IrcCompleter::Direction direction)
 {
-    d.completer->complete(text(), cursorPosition());
+    d.completer->complete(text(), cursorPosition(), direction);
 }
 
 void TextInput::doComplete(const QString& text, int cursor)

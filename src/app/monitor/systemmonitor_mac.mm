@@ -17,6 +17,10 @@
 #include <Cocoa/Cocoa.h>
 
 @interface CocoaSystemMonitor : NSObject
+{
+    SystemMonitor* monitor;
+}
+@property (assign) SystemMonitor* monitor;
 @end
 
 class SystemMonitorPrivate
@@ -27,6 +31,7 @@ public:
 };
 
 @implementation CocoaSystemMonitor
+@synthesize monitor;
 - (id)init
 {
     self = [super init];
@@ -41,6 +46,18 @@ public:
         [[NSNotificationCenter defaultCenter] addObserver: self
             selector: @selector(receiveNetworkNote:)
             name: kReachabilityChangedNotification object: nil];
+        [[NSDistributedNotificationCenter defaultCenter] addObserver: self
+            selector: @selector(receiveScreenLockNote:)
+            name: @"com.apple.screenIsLocked" object: nil];
+        [[NSDistributedNotificationCenter defaultCenter] addObserver: self
+            selector: @selector(receiveScreenUnlockNote:)
+            name: @"com.apple.screenIsUnlocked" object: nil];
+        [[NSDistributedNotificationCenter defaultCenter] addObserver: self
+            selector: @selector(receiveScreenSaverStartNote:)
+            name: @"com.apple.screensaver.didstart" object: nil];
+        [[NSDistributedNotificationCenter defaultCenter] addObserver: self
+            selector: @selector(receiveScreenSaverStopNote:)
+            name: @"com.apple.screensaver.didstop" object: nil];
     }
     return self;
 }
@@ -48,21 +65,45 @@ public:
 - (void) receiveSleepNote: (NSNotification*) note
 {
     Q_UNUSED(note);
-    QMetaObject::invokeMethod(SystemMonitor::instance(), "sleep");
+    QMetaObject::invokeMethod(monitor, "sleep");
 }
 
 - (void) receiveWakeNote: (NSNotification*) note
 {
     Q_UNUSED(note);
-    QMetaObject::invokeMethod(SystemMonitor::instance(), "wake");
+    QMetaObject::invokeMethod(monitor, "wake");
 }
 
-- (void) receiveNetworkNote: (NSNotification* )note
+- (void) receiveNetworkNote: (NSNotification*) note
 {
     Reachability* reachability = [note object];
     NSParameterAssert([reachability isKindOfClass: [Reachability class]]);
     BOOL offline = [reachability connectionRequired];
-    QMetaObject::invokeMethod(SystemMonitor::instance(), offline ? "offline" : "online");
+    QMetaObject::invokeMethod(monitor, offline ? "offline" : "online");
+}
+
+- (void) receiveScreenLockNote: (NSNotification*) note
+{
+    Q_UNUSED(note);
+    QMetaObject::invokeMethod(monitor, "screenLocked");
+}
+
+- (void) receiveScreenUnlockNote: (NSNotification*) note
+{
+    Q_UNUSED(note);
+    QMetaObject::invokeMethod(monitor, "screenUnlocked");
+}
+
+- (void) receiveScreenSaverStartNote: (NSNotification*) note
+{
+    Q_UNUSED(note);
+    QMetaObject::invokeMethod(monitor, "screenSaverStarted");
+}
+
+- (void) receiveScreenSaverStopNote: (NSNotification*) note
+{
+    Q_UNUSED(note);
+    QMetaObject::invokeMethod(monitor, "screenSaverStopped");
 }
 @end
 
@@ -70,6 +111,7 @@ void SystemMonitor::initialize()
 {
     d = new SystemMonitorPrivate;
     d->notifier = [[CocoaSystemMonitor alloc] init];
+    [d->notifier setMonitor: this];
     d->reachability = [[Reachability reachabilityForInternetConnection] retain];
     [d->reachability startNotifier];
 }

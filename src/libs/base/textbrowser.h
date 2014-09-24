@@ -39,6 +39,7 @@ public:
 
     bool isAtTop() const;
     bool isAtBottom() const;
+    bool isZoomed() const;
 
     QMenu* createContextMenu(const QPoint& pos);
 
@@ -49,12 +50,15 @@ public slots:
     void scrollToBottom();
     void scrollToNextPage();
     void scrollToPreviousPage();
+    void moveCursorToBottom();
 
 signals:
     void queried(const QString& user);
     void documentChanged(TextDocument* document);
 
 protected:
+    void mousePressEvent(QMouseEvent* event);
+    void mouseMoveEvent(QMouseEvent* event);
     void keyPressEvent(QKeyEvent* event);
     void paintEvent(QPaintEvent* event);
     void resizeEvent(QResizeEvent* event);
@@ -62,6 +66,8 @@ protected:
 
 private slots:
     void keepAtBottom();
+    void keepPosition(int delta);
+    void moveShadow(int offset);
     void onAnchorClicked(const QUrl& url);
 
     void onWhoisTriggered();
@@ -69,6 +75,7 @@ private slots:
 
 private:
     struct Private {
+        bool events;
         QWidget* bud;
         TextShadow* shadow;
     } d;

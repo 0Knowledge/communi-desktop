@@ -27,20 +27,29 @@ void ZncPlugin::connectionAdded(IrcConnection* connection)
 {
     ZncManager* manager = new ZncManager(connection);
     manager->setModel(connection->findChild<IrcBufferModel*>());
-    // TODO: connect(manager, SIGNAL(playbackBegin(IrcBuffer*)), this, SLOT(onPlaybackBegin(IrcBuffer*)));
-    // TODO: connect(manager, SIGNAL(playbackEnd(IrcBuffer*)), this, SLOT(onPlaybackEnd(IrcBuffer*)));
+// TODO:
+//    connect(manager, SIGNAL(playbackBegin(IrcBuffer*)), this, SLOT(onPlaybackBegin(IrcBuffer*)));
+//    connect(manager, SIGNAL(playbackEnd(IrcBuffer*)), this, SLOT(onPlaybackEnd(IrcBuffer*)));
 }
 
-void ZncPlugin::onPlaybackBegin(IrcBuffer* buffer)
+void ZncPlugin::documentAdded(TextDocument* document)
 {
-    QList<TextDocument*> documents = buffer->findChildren<TextDocument*>();
-    foreach (TextDocument* doc, documents)
-        doc->beginLowlight();
+    d.documents.insert(document->buffer(), document);
 }
 
-void ZncPlugin::onPlaybackEnd(IrcBuffer* buffer)
+void ZncPlugin::documentRemoved(TextDocument* document)
 {
-    QList<TextDocument*> documents = buffer->findChildren<TextDocument*>();
-    foreach (TextDocument* doc, documents)
-        doc->endLowlight();
+    d.documents.remove(document->buffer(), document);
 }
+
+//void ZncPlugin::onPlaybackBegin(IrcBuffer* buffer)
+//{
+//    foreach (TextDocument* doc, d.documents.values(buffer))
+//        doc->beginLowlight();
+//}
+
+//void ZncPlugin::onPlaybackEnd(IrcBuffer* buffer)
+//{
+//    foreach (TextDocument* doc, d.documents.values(buffer))
+//        doc->endLowlight();
+//}

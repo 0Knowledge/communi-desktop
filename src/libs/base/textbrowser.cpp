@@ -19,11 +19,13 @@
 #include <QStylePainter>
 #include <QStyleOption>
 #include <QApplication>
+#include <QTextBlock>
 #include <IrcCommand>
 #include <QScrollBar>
 #include <IrcBuffer>
 #include <QKeyEvent>
 #include <QPainter>
+#include <QToolTip>
 #include <QAction>
 #include <QMenu>
 
@@ -32,12 +34,14 @@ class TextShadow : public QFrame { Q_OBJECT };
 TextBrowser::TextBrowser(QWidget* parent) : QTextBrowser(parent)
 {
     d.bud = 0;
+    d.events = true;
     d.shadow = new TextShadow;
     d.shadow->setParent(this);
 
     setOpenLinks(false);
     setTabChangesFocus(true);
     setContextMenuPolicy(Qt::CustomContextMenu);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     connect(this, SIGNAL(anchorClicked(QUrl)), this, SLOT(onAnchorClicked(QUrl)));
 }
@@ -73,17 +77,18 @@ void TextBrowser::setDocument(TextDocument* document)
         if (doc) {
             doc->setVisible(false);
             disconnect(doc->documentLayout(), SIGNAL(documentSizeChanged(QSizeF)), this, SLOT(keepAtBottom()));
+            disconnect(doc, SIGNAL(lineRemoved(int)), this, SLOT(keepPosition(int)));
         }
         if (document) {
             document->setVisible(true);
             document->setDefaultFont(font());
             connect(document->documentLayout(), SIGNAL(documentSizeChanged(QSizeF)), this, SLOT(keepAtBottom()));
+            connect(document, SIGNAL(lineRemoved(int)), this, SLOT(keepPosition(int)));
         }
-        setUpdatesEnabled(false);
+        connect(this, SIGNAL(textChanged()), this, SLOT(moveCursorToBottom()));
         QTextBrowser::setDocument(document);
+        disconnect(this, SIGNAL(textChanged()), this, SLOT(moveCursorToBottom()));
         scrollToBottom();
-        setUpdatesEnabled(true);
-        repaint();
         emit documentChanged(document);
     }
 }
@@ -96,6 +101,27 @@ QWidget* TextBrowser::buddy() const
 void TextBrowser::setBuddy(QWidget* buddy)
 {
     d.bud = buddy;
+}
+
+void TextBrowser::mousePressEvent(QMouseEvent* event)
+{
+    const QUrl url(anchorAt(event->pos()));
+    if (url.scheme() == "expand") {
+        QString text;
+        if (TextDocument* doc = document()) {
+            const QPoint offset(horizontalScrollBar()->value(), verticalScrollBar()->value());
+            text = doc->tooltip(event->pos() + offset);
+        }
+        if (!text.isEmpty())
+            QToolTip::showText(event->globalPos(), text, viewport());
+    }
+    QTextBrowser::mousePressEvent(event);
+}
+
+void TextBrowser::mouseMoveEvent(QMouseEvent* event)
+{
+    QToolTip::hideText();
+    QTextBrowser::mouseMoveEvent(event);
 }
 
 void TextBrowser::keyPressEvent(QKeyEvent* event)
@@ -146,6 +172,14 @@ bool TextBrowser::isAtBottom() const
     return verticalScrollBar()->value() >= verticalScrollBar()->maximum();
 }
 
+bool TextBrowser::isZoomed() const
+{
+    QFont f = font();
+    if (f.pointSize() != -1)
+        return f.pointSize() != QFont().pointSize();
+    return f.pixelSize() != QFont().pixelSize();
+}
+
 QMenu* TextBrowser::createContextMenu(const QPoint& pos)
 {
     // QTextEdit::createStandardContextMenu() expects document coordinates
@@ -174,7 +208,7 @@ QMenu* TextBrowser::createContextMenu(const QPoint& pos)
         menu->insertAction(queryAction, whoisAction);
         connect(whoisAction, SIGNAL(triggered()), this, SLOT(onWhoisTriggered()));
 
-        QString nick = QUrl(anchor).toString(QUrl::RemoveScheme);
+        QString nick = QUrl(anchor).toString(QUrl::RemoveScheme | QUrl::RemoveFragment);
         queryAction->setData(nick);
         whoisAction->setData(nick);
     }
@@ -255,13 +289,30 @@ void TextBrowser::keepAtBottom()
         QMetaObject::invokeMethod(this, "scrollToBottom", Qt::QueuedConnection);
 }
 
+void TextBrowser::keepPosition(int delta)
+{
+    if (!isAtBottom())
+        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta);
+}
+
+void TextBrowser::moveCursorToBottom()
+{
+    QTextCursor cursor = textCursor();
+    cursor.movePosition(QTextCursor::End);
+    setTextCursor(cursor);
+}
+
+void TextBrowser::moveShadow(int offset)
+{
+    d.shadow->move(0, offset);
+}
+
 void TextBrowser::onAnchorClicked(const QUrl& url)
 {
-    if (url.scheme() == "nick")
-        emit queried(url.toString(QUrl::RemoveScheme));
-    else
+    if (url.scheme() != "expand")
         QDesktopServices::openUrl(url);
     clearFocus();
+    d.bud->setFocus();
 }
 
 void TextBrowser::onWhoisTriggered()

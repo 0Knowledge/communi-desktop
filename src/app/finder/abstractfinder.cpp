@@ -14,6 +14,7 @@
 
 #include "abstractfinder.h"
 #include <QPropertyAnimation>
+#include <QGraphicsOpacityEffect>
 #include <QStylePainter>
 #include <QStyleOption>
 #include <QApplication>
@@ -27,6 +28,7 @@ AbstractFinder::AbstractFinder(QWidget* parent) : QWidget(parent)
     d.error = false;
 
     parent->installEventFilter(this);
+    setGraphicsEffect(new QGraphicsOpacityEffect(this));
 
     d.lineEdit = new QLineEdit(this);
     d.lineEdit->setAttribute(Qt::WA_MacShowFocusRect, false);
@@ -56,6 +58,16 @@ AbstractFinder::AbstractFinder(QWidget* parent) : QWidget(parent)
 AbstractFinder::~AbstractFinder()
 {
     emit destroyed(this);
+}
+
+QString AbstractFinder::text() const
+{
+    return d.lineEdit->text();
+}
+
+void AbstractFinder::setText(const QString& text)
+{
+    d.lineEdit->setText(text);
 }
 
 int AbstractFinder::offset() const

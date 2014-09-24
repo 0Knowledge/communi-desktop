@@ -30,7 +30,9 @@
 #include <IrcBuffer>
 #include <QShortcut>
 #include <QBitArray>
+#include <QToolTip>
 #include <QAction>
+#include <QStyle>
 #include <QTimer>
 #include <QMenu>
 
@@ -38,7 +40,7 @@ TreeWidget::TreeWidget(QWidget* parent) : QTreeWidget(parent)
 {
     d.block = false;
     d.blink = false;
-    d.source = 0;
+    d.pressedItem = 0;
     d.sortingBlocked = false;
 
     qRegisterMetaType<TreeItem*>();
@@ -51,6 +53,9 @@ TreeWidget::TreeWidget(QWidget* parent) : QTreeWidget(parent)
     setFocusPolicy(Qt::NoFocus);
     setFrameStyle(QFrame::NoFrame);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+#ifdef Q_OS_MAC
+    setVerticalScrollMode(ScrollPerPixel);
+#endif
 
     setItemDelegate(new TreeDelegate(this));
 
@@ -319,6 +324,30 @@ QSize TreeWidget::sizeHint() const
     return QSize(w, QTreeWidget::sizeHint().height());
 }
 
+bool TreeWidget::viewportEvent(QEvent* event)
+{
+    if (event->type() == QEvent::ToolTip) {
+        QHelpEvent* he = static_cast<QHelpEvent*>(event);
+        TreeItem* item = static_cast<TreeItem*>(itemAt(he->pos()));
+        if (item && !item->parentItem() && !item->toolTip(0).isEmpty()) {
+            QStyleOptionViewItem opt = viewOptions();
+            opt.icon = item->icon(0);
+            opt.rect = visualItemRect(item);
+            opt.features |= QStyleOptionViewItem::HasDecoration;
+            QRect rect = style()->subElementRect(QStyle::SE_ItemViewItemDecoration, &opt, this);
+            if (rect.contains(he->pos())) {
+#if QT_VERSION >= 0x050200
+                QToolTip::showText(he->globalPos(), item->toolTip(0), this, rect, 1250);
+#else
+                QToolTip::showText(he->globalPos(), item->toolTip(0), this, rect);
+#endif
+            }
+        }
+        return true;
+    }
+    return QTreeWidget::viewportEvent(event);
+}
+
 void TreeWidget::contextMenuEvent(QContextMenuEvent* event)
 {
     TreeItem* item = static_cast<TreeItem*>(itemAt(event->pos()));
@@ -331,18 +360,27 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* event)
 
 void TreeWidget::mousePressEvent(QMouseEvent* event)
 {
-    d.source = itemAt(event->pos());
+    d.pressedTime.start();
+    d.pressedPoint = event->pos();
     QTreeWidget::mousePressEvent(event);
 }
 
 void TreeWidget::mouseMoveEvent(QMouseEvent* event)
 {
-    QTreeWidgetItem* target = itemAt(event->pos());
-    if (target && d.source != target) {
-        QTreeWidgetItem* parent = target->parent();
-        if (parent == d.source->parent()) {
-            setSortingBlocked(true);
-            swapItems(d.source, target);
+    if (!d.pressedItem) {
+        int time = d.pressedTime.elapsed();
+        int distance = QPoint(event->pos() - d.pressedPoint).manhattanLength();
+        if (time >= QApplication::startDragTime() && distance >= QApplication::startDragDistance())
+            d.pressedItem = itemAt(event->pos());
+    }
+    if (d.pressedItem) {
+        QTreeWidgetItem* target = itemAt(event->pos());
+        if (target && d.pressedItem != target) {
+            QTreeWidgetItem* parent = target->parent();
+            if (parent == d.pressedItem->parent()) {
+                setSortingBlocked(true);
+                swapItems(d.pressedItem, target);
+            }
         }
     }
     QTreeWidget::mouseMoveEvent(event);
@@ -350,12 +388,12 @@ void TreeWidget::mouseMoveEvent(QMouseEvent* event)
 
 void TreeWidget::mouseReleaseEvent(QMouseEvent* event)
 {
-    if (d.source && isSortingBlocked()) {
+    if (d.pressedItem && isSortingBlocked()) {
         initSortOrder();
         saveSortOrder();
     }
     setSortingBlocked(false);
-    d.source = 0;
+    d.pressedItem = 0;
     QTreeWidget::mouseReleaseEvent(event);
 }
 
@@ -387,7 +425,9 @@ void TreeWidget::onMessageReceived(IrcMessage* message)
                 }
             }
             if (!visible) {
-                item->setData(1, TreeRole::Badge, item->data(1, TreeRole::Badge).toInt() + 1);
+                // exclude broadcasted global notices
+                if (message->property("target") != "$$*")
+                    item->setData(1, TreeRole::Badge, item->data(1, TreeRole::Badge).toInt() + 1);
                 if (message->property("private").toBool() ||
                         message->property("content").toString().contains(message->connection()->nickName(), Qt::CaseInsensitive)) {
                     highlightItem(item);
@@ -519,7 +559,7 @@ void TreeWidget::swapItems(QTreeWidgetItem* source, QTreeWidgetItem* target)
 
 void TreeWidget::highlightItem(QTreeWidgetItem* item)
 {
-    if (item && !d.highlightedItems.contains(item)) {
+    if (item && item->parent() && !d.highlightedItems.contains(item)) {
         if (d.highlightedItems.isEmpty())
             SharedTimer::instance()->registerReceiver(this, "blinkItems");
         d.highlightedItems.insert(item);
@@ -529,7 +569,7 @@ void TreeWidget::highlightItem(QTreeWidgetItem* item)
 
 void TreeWidget::unhighlightItem(QTreeWidgetItem* item)
 {
-    if (item && d.highlightedItems.contains(item)) {
+    if (item && item->parent() && d.highlightedItems.contains(item)) {
         d.highlightedItems.remove(item);
         if (d.highlightedItems.isEmpty())
             SharedTimer::instance()->unregisterReceiver(this, "blinkItems");
@@ -544,9 +584,6 @@ void TreeWidget::updateHighlight(QTreeWidgetItem* item)
         const bool hilite = d.blink && d.highlightedItems.contains(item);
         item->setData(0, TreeRole::Highlight, hilite);
         item->setData(1, TreeRole::Highlight, hilite);
-        TreeItem* pi = ti->parentItem();
-        if (pi)
-            pi->setData(0, TreeRole::Highlight, hilite && !pi->isExpanded());
     }
 }
 
@@ -678,6 +715,9 @@ void TreeWidget::restoreSortOrder()
 QMenu* TreeWidget::createContextMenu(TreeItem* item)
 {
     QMenu* menu = new QMenu(this);
+    menu->addAction(item->text(0))->setEnabled(false);
+    menu->addSeparator();
+
     connect(item, SIGNAL(destroyed(TreeItem*)), menu, SLOT(deleteLater()));
 
     const bool child = item->parentItem();
@@ -685,21 +725,20 @@ QMenu* TreeWidget::createContextMenu(TreeItem* item)
     const bool active = item->buffer()->isActive();
     const bool channel = item->buffer()->isChannel();
 
-    if (connected) {
-        QAction* disconnectAction = menu->addAction(tr("Disconnect"));
-        connect(disconnectAction, SIGNAL(triggered()), item->connection(), SLOT(setDisabled()));
-        connect(disconnectAction, SIGNAL(triggered()), item->connection(), SLOT(quit()));
-    } else {
-        QAction* reconnectAction = menu->addAction(tr("Reconnect"));
-        connect(reconnectAction, SIGNAL(triggered()), item->connection(), SLOT(setEnabled()));
-        connect(reconnectAction, SIGNAL(triggered()), item->connection(), SLOT(open()));
-    }
-    menu->addSeparator();
-
     if (!child) {
         QAction* editAction = menu->addAction(tr("Edit"), this, SLOT(onEditTriggered()));
         editAction->setData(QVariant::fromValue(item));
-        editAction->setEnabled(!connected);
+        menu->addSeparator();
+
+        if (connected) {
+            QAction* disconnectAction = menu->addAction(tr("Disconnect"));
+            connect(disconnectAction, SIGNAL(triggered()), item->connection(), SLOT(setDisabled()));
+            connect(disconnectAction, SIGNAL(triggered()), item->connection(), SLOT(quit()));
+        } else {
+            QAction* reconnectAction = menu->addAction(tr("Reconnect"));
+            connect(reconnectAction, SIGNAL(triggered()), item->connection(), SLOT(setEnabled()));
+            connect(reconnectAction, SIGNAL(triggered()), item->connection(), SLOT(open()));
+        }
     }
 
     if (connected && child) {
@@ -713,7 +752,6 @@ QMenu* TreeWidget::createContextMenu(TreeItem* item)
         action->setData(QVariant::fromValue(item));
     }
 
-    menu->addSeparator();
     QAction* closeAction = menu->addAction(tr("Close"), this, SLOT(onCloseTriggered()), QKeySequence::Close);
     closeAction->setShortcutContext(Qt::WidgetShortcut);
     closeAction->setData(QVariant::fromValue(item));

@@ -35,6 +35,7 @@ Dock::Dock(MainWindow* window) : QObject(window)
     d.blink = false;
     d.blinking = false;
     d.window = window;
+    d.active = false;
 
     connect(window, SIGNAL(activated()), this, SLOT(onWindowActivated()));
     connect(window, SIGNAL(connectionAdded(IrcConnection*)), this, SLOT(onConnectionAdded(IrcConnection*)));
@@ -43,7 +44,6 @@ Dock::Dock(MainWindow* window) : QObject(window)
     if (QtDockTile::isAvailable())
         d.dock = new QtDockTile(window);
 
-#if defined(Q_OS_MAC) || defined(Q_OS_WIN)
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
         d.tray = new QSystemTrayIcon(this);
 
@@ -71,10 +71,10 @@ Dock::Dock(MainWindow* window) : QObject(window)
 
         connect(d.tray, SIGNAL(activated(QSystemTrayIcon::ActivationReason)),
                 this, SLOT(onTrayActivated(QSystemTrayIcon::ActivationReason)));
+        connect(d.tray, SIGNAL(messageClicked()), this, SLOT(onTrayMessageClicked()));
 
         updateTray();
     }
-#endif
 
     if (Alert::isAvailable()) {
         d.alert = new Alert(this);
@@ -91,14 +91,16 @@ Dock::Dock(MainWindow* window) : QObject(window)
 
 void Dock::alert(IrcMessage* message)
 {
-    if (!d.window->isActiveWindow()) {
+    if (!d.window->isActiveWindow() || d.active) {
         QApplication::alert(d.window);
         if (d.alert && (!d.mute || !d.mute->isChecked()))
             d.alert->play();
         if (d.tray && !d.blinking) {
+#if defined(Q_OS_MAC) || defined(Q_OS_WIN)
             QString content = message->property("content").toString();
             if (!content.isEmpty())
                 d.tray->showMessage(tr("Communi"), message->nick() + ": " + IrcTextFormat().toPlainText(content));
+#endif
             SharedTimer::instance()->registerReceiver(this, "updateTray");
             d.blinking = true;
             d.blink = true;
@@ -141,6 +143,16 @@ void Dock::updateTray()
     }
 }
 
+void Dock::activateAlert()
+{
+    d.active = true;
+}
+
+void Dock::deactivateAlert()
+{
+    d.active = false;
+}
+
 void Dock::onWindowActivated()
 {
     if (d.tray && d.blinking) {
@@ -172,4 +184,11 @@ void Dock::onTrayActivated(QSystemTrayIcon::ActivationReason reason)
         default:
             break;
     }
+}
+
+void Dock::onTrayMessageClicked()
+{
+    d.window->show();
+    d.window->raise();
+    d.window->activateWindow();
 }

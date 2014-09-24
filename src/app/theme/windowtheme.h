@@ -12,33 +12,17 @@
 * GNU General Public License for more details.
 */
 
-#ifndef SYSTEMMONITOR_H
-#define SYSTEMMONITOR_H
+#ifndef WINDOWTHEME_H
+#define WINDOWTHEME_H
 
-#include <QObject>
+#include <QWidget>
 
-class SystemMonitorPrivate;
+class ThemeInfo;
 
-class SystemMonitor : public QObject
+class WindowTheme
 {
-    Q_OBJECT
-
 public:
-    SystemMonitor(QObject* parent = 0);
-    ~SystemMonitor();
-
-signals:
-    void wake();
-    void sleep();
-    void online();
-    void offline();
-
-protected:
-    void initialize();
-    void uninitialize();
-
-private:
-    SystemMonitorPrivate* d;
+    static void setTheme(QWidget* window, const ThemeInfo& theme);
 };
 
-#endif // SYSTEMMONITOR_H
+#endif // WINDOWTHEME_H

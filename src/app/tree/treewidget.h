@@ -15,6 +15,7 @@
 #ifndef TREEWIDGET_H
 #define TREEWIDGET_H
 
+#include <QTime>
 #include <QHash>
 #include <QQueue>
 #include <QPointer>
@@ -76,6 +77,7 @@ signals:
 
 protected:
     QSize sizeHint() const;
+    bool viewportEvent(QEvent* event);
     void contextMenuEvent(QContextMenuEvent* event);
     void mousePressEvent(QMouseEvent* event);
     void mouseMoveEvent(QMouseEvent* event);
@@ -122,8 +124,10 @@ private:
         bool blink;
         QVariantMap sorting;
         bool sortingBlocked;
-        QTreeWidgetItem* source;
+        QTime pressedTime;
+        QPoint pressedPoint;
         QStringList parentOrder;
+        QTreeWidgetItem* pressedItem;
         QHashStringList childrenOrders;
         QList<IrcConnection*> connections;
         QQueue<QPointer<TreeItem> > resetBadges;

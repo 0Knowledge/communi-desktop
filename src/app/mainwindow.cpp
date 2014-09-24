@@ -9,6 +9,7 @@
 
 #include "mainwindow.h"
 #include "settingspage.h"
+#include "systemmonitor.h"
 #include "textdocument.h"
 #include "connectpage.h"
 #include "bufferview.h"
@@ -80,8 +81,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(shortcut, SIGNAL(activated()), d.chatPage, SLOT(closeBuffer()));
 
     d.dock = new Dock(this);
-    connect(d.chatPage, SIGNAL(messageMissed(IrcMessage*)), d.dock, SLOT(alert(IrcMessage*)));
     connect(d.chatPage, SIGNAL(messageHighlighted(IrcMessage*)), d.dock, SLOT(alert(IrcMessage*)));
+    connect(d.chatPage, SIGNAL(privateMessageReceived(IrcMessage*)), d.dock, SLOT(alert(IrcMessage*)));
+
+    d.monitor = new SystemMonitor(this);
+    connect(d.monitor, SIGNAL(screenLocked()), d.dock, SLOT(activateAlert()));
+    connect(d.monitor, SIGNAL(screenUnlocked()), d.dock, SLOT(deactivateAlert()));
+    connect(d.monitor, SIGNAL(screenSaverStarted()), d.dock, SLOT(activateAlert()));
+    connect(d.monitor, SIGNAL(screenSaverStopped()), d.dock, SLOT(deactivateAlert()));
 
 #ifdef Q_OS_MAC
     QMenu* menu = new QMenu(this);
@@ -132,7 +139,7 @@ void MainWindow::restoreState()
 
     foreach (const QVariant& v, settings.value("connections").toList()) {
         QVariantMap state = v.toMap();
-        IrcConnection* connection = new IrcConnection(this);
+        IrcConnection* connection = new IrcConnection(d.chatPage);
         connection->restoreState(state.value("connection").toByteArray());
         addConnection(connection);
         if (state.contains("model") && connection->isEnabled()) {
@@ -169,6 +176,14 @@ void MainWindow::addConnection(IrcConnection* connection)
         ud.insert("uuid", QUuid::createUuid());
         connection->setUserData(ud);
     }
+
+    connect(d.monitor, SIGNAL(wake()), connection, SLOT(open()));
+    connect(d.monitor, SIGNAL(online()), connection, SLOT(open()));
+
+    connect(d.monitor, SIGNAL(sleep()), connection, SLOT(quit()));
+    connect(d.monitor, SIGNAL(sleep()), connection, SLOT(close()));
+
+    connect(d.monitor, SIGNAL(offline()), connection, SLOT(close()));
 
     d.connections += connection;
     connect(connection, SIGNAL(destroyed(IrcConnection*)), this, SLOT(removeConnection(IrcConnection*)));
@@ -273,7 +288,7 @@ void MainWindow::onConnectAccepted()
 {
     ConnectPage* page = qobject_cast<ConnectPage*>(sender());
     if (page) {
-        IrcConnection* connection = new IrcConnection(this);
+        IrcConnection* connection = new IrcConnection(d.chatPage);
         connection->setHost(page->host());
         connection->setPort(page->port());
         connection->setSecure(page->isSecure());

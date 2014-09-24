@@ -16,14 +16,13 @@
 #define TEXTDOCUMENT_H
 
 #include <QTextDocument>
-#include <QStringList>
 #include <QMetaType>
 #include <QDateTime>
-#include <QMap>
+#include "messagedata.h"
 
 class IrcBuffer;
 class IrcMessage;
-class TextBlockData;
+class MessageData;
 class MessageFormatter;
 
 class TextDocument : public QTextDocument
@@ -50,49 +49,57 @@ public:
     bool isVisible() const;
     void setVisible(bool visible);
 
-    void beginLowlight();
-    void endLowlight();
-
-    void addHighlight(int block = -1);
-    void removeHighlight(int block);
-
     void drawBackground(QPainter* painter, const QRect& bounds);
     void drawForeground(QPainter* painter, const QRect& bounds);
 
+    QString tooltip(const QPoint& pos) const;
+
 public slots:
     void reset();
-    void append(const QString& message, const QDateTime& timestamp = QDateTime());
+    void lowlight(int block = -1);
+    void addHighlight(int block = -1);
+    void removeHighlight(int block);
+    void append(const MessageData& message);
     void receiveMessage(IrcMessage* message);
 
 signals:
-    void messageMissed(IrcMessage* message);
+    void lineRemoved(int height);
     void messageReceived(IrcMessage* message);
     void messageHighlighted(IrcMessage* message);
+    void privateMessageReceived(IrcMessage* message);
 
 protected:
     void updateBlock(int number);
     void timerEvent(QTimerEvent* event);
 
 private slots:
-    void flushLines();
+    void flush();
+    void rebuild();
 
 private:
-    void rebuild();
-    void appendLine(QTextCursor& cursor, TextBlockData* line);
+    void scheduleRebuild();
+    void shiftLights(int diff);
+    void insert(QTextCursor& cursor, const MessageData& data);
+
+    MessageData formatMessage(IrcMessage* message) const;
+    QString formatEvents(const QList<MessageData>& events) const;
+    QString formatSummary(const QList<MessageData>& events) const;
+    QString formatBlock(const QDateTime& timestamp, const QString& message) const;
+
+    friend class TextBrowser;
 
     struct Private {
-        int ub;
+        int uc;
         int dirty;
         bool clone;
-        bool drawUb;
+        int rebuild;
         QString css;
         int lowlight;
         bool visible;
         IrcBuffer* buffer;
         QList<int> highlights;
         QString timeStampFormat;
-        QMap<int, int> lowlights;
-        QList<TextBlockData*> lines;
+        QList<MessageData> queue;
         MessageFormatter* formatter;
     } d;
 };

@@ -13,7 +13,7 @@
 */
 
 #include "textdocument.h"
-#include "messageformatter.h"
+#include "eventformatter.h"
 #include <QAbstractTextDocumentLayout>
 #include <QTextDocumentFragment>
 #include <QTextBlockUserData>
@@ -23,6 +23,7 @@
 #include <QStyleOption>
 #include <QTextCursor>
 #include <QTextBlock>
+#include <IrcMessage>
 #include <IrcBuffer>
 #include <QPalette>
 #include <QPointer>
@@ -31,13 +32,6 @@
 #include <qmath.h>
 
 static int delay = 1000;
-
-class TextBlockData : public QTextBlockUserData
-{
-public:
-    QString message;
-    QDateTime timestamp;
-};
 
 class TextFrame : public QFrame
 {
@@ -72,25 +66,31 @@ public:
     TextLowlight(QWidget* parent = 0) : TextFrame(parent) { }
 };
 
+struct TextBlockMessageData : QTextBlockUserData
+{
+    TextBlockMessageData(const MessageData& data) : data(data) { }
+    MessageData data;
+};
+
 TextDocument::TextDocument(IrcBuffer* buffer) : QTextDocument(buffer)
 {
     qRegisterMetaType<TextDocument*>();
 
-    d.ub = -1;
+    d.uc = 0;
     d.dirty = -1;
+    d.rebuild = -1;
     d.lowlight = -1;
     d.clone = false;
-    d.drawUb = false;
     d.buffer = buffer;
     d.visible = false;
 
     d.formatter = new MessageFormatter(this);
-    d.formatter->setTimeStampFormat(QString());
     d.formatter->setBuffer(buffer);
 
     setUndoRedoEnabled(false);
     setMaximumBlockCount(1000);
 
+    connect(buffer->connection(), SIGNAL(disconnected()), this, SLOT(lowlight()));
     connect(buffer, SIGNAL(messageReceived(IrcMessage*)), this, SLOT(receiveMessage(IrcMessage*)));
 }
 
@@ -103,7 +103,7 @@ void TextDocument::setTimeStampFormat(const QString& format)
 {
     if (d.timeStampFormat != format) {
         d.timeStampFormat = format;
-        rebuild();
+        scheduleRebuild();
     }
 }
 
@@ -117,38 +117,27 @@ void TextDocument::setStyleSheet(const QString& css)
     if (d.css != css) {
         d.css = css;
         setDefaultStyleSheet(css);
-        rebuild();
+        scheduleRebuild();
     }
 }
 
 TextDocument* TextDocument::clone()
 {
     if (d.dirty > 0)
-        flushLines();
+        flush();
 
     TextDocument* doc = new TextDocument(d.buffer);
     doc->setDefaultStyleSheet(defaultStyleSheet());
     QTextCursor(doc).insertFragment(QTextDocumentFragment(this));
     doc->rootFrame()->setFrameFormat(rootFrame()->frameFormat());
 
-    QTextBlock source = begin();
-    while (source.isValid()) {
-        QTextBlock target = doc->findBlockByNumber(source.blockNumber());
-        if (target.isValid()) {
-            TextBlockData* data = static_cast<TextBlockData*>(source.userData());
-            if (data)
-                target.setUserData(new TextBlockData(*data));
-        }
-        source = source.next();
-    }
-
     // TODO:
-    doc->d.ub = d.ub;
+    doc->d.uc = d.uc;
     doc->d.css = d.css;
     doc->d.lowlight = d.lowlight;
     doc->d.buffer = d.buffer;
     doc->d.highlights = d.highlights;
-    doc->d.lowlights = d.lowlights;
+    doc->d.timeStampFormat = d.timeStampFormat;
     doc->d.clone = true;
 
     return doc;
@@ -171,7 +160,7 @@ MessageFormatter* TextDocument::formatter() const
 
 int TextDocument::totalCount() const
 {
-    int count = d.lines.count();
+    int count = d.queue.count();
     if (!isEmpty())
         count += blockCount();
     return count;
@@ -187,24 +176,22 @@ void TextDocument::setVisible(bool visible)
     if (d.visible != visible) {
         if (visible) {
             if (d.dirty > 0)
-                flushLines();
+                flush();
         } else {
-            d.ub = -1;
+            d.uc = 0;
         }
         d.visible = visible;
     }
 }
 
-void TextDocument::beginLowlight()
+void TextDocument::lowlight(int block)
 {
-    d.lowlight = totalCount();
-    d.lowlights.insert(d.lowlight, -1);
-}
-
-void TextDocument::endLowlight()
-{
-    d.lowlights.insert(d.lowlight, totalCount());
-    d.lowlight = -1;
+    if (block == -1)
+        block = totalCount() - 1;
+    if (d.lowlight != block) {
+        d.lowlight = block;
+        updateBlock(block);
+    }
 }
 
 void TextDocument::addHighlight(int block)
@@ -227,45 +214,69 @@ void TextDocument::removeHighlight(int block)
 
 void TextDocument::reset()
 {
-    d.ub = -1;
+    d.uc = 0;
     d.lowlight = -1;
-    d.lowlights.clear();
     d.highlights.clear();
+    d.queue.clear();
 }
 
-void TextDocument::append(const QString& message, const QDateTime& timestamp)
+void TextDocument::append(const MessageData& data)
 {
-    if (!message.isEmpty()) {
-        TextBlockData* data = new TextBlockData;
-        data->timestamp = timestamp;
-        data->message = message;
+    if (!data.isEmpty()) {
+        MessageData last;
+        if (!d.queue.isEmpty())
+            last = d.queue.last();
+        else if (TextBlockMessageData* block = static_cast<TextBlockMessageData*>(lastBlock().userData()))
+            last = block->data;
+
+        MessageData msg = data;
+        const bool merge = last.canMerge(data);
+        if (merge) {
+            msg.merge(last);
+            msg.setFormat(formatSummary(msg.getEvents()));
+            if (!d.queue.isEmpty())
+                d.queue.replace(d.queue.count() - 1, msg);
+        } else {
+            ++d.uc;
+        }
         if (d.dirty == 0 || d.visible) {
             QTextCursor cursor(this);
             cursor.beginEditBlock();
-            appendLine(cursor, data);
+            if (merge) {
+                cursor.movePosition(QTextCursor::End);
+                cursor.movePosition(QTextCursor::StartOfBlock, QTextCursor::KeepAnchor);
+                cursor.removeSelectedText();
+                cursor.deletePreviousChar();
+            }
+            insert(cursor, msg);
             cursor.endEditBlock();
         } else {
             if (d.dirty <= 0) {
                 d.dirty = startTimer(delay);
                 delay += 1000;
             }
-            d.lines += data;
+            if (!merge)
+                d.queue += msg;
         }
     }
 }
 
 void TextDocument::drawForeground(QPainter* painter, const QRect& bounds)
 {
-    if (d.drawUb) {
+    const int num = blockCount() - d.uc;
+    if (num > 0) {
         const QPen oldPen = painter->pen();
         const QBrush oldBrush = painter->brush();
         painter->setBrush(Qt::NoBrush);
         painter->setPen(QPen(QPalette().color(QPalette::Mid), 1, Qt::DashLine));
-        QTextBlock block = findBlockByNumber(d.ub);
+        QTextBlock block = findBlockByNumber(num);
         if (block.isValid()) {
             QRect br = documentLayout()->blockBoundingRect(block).toAlignedRect();
-            if (bounds.intersects(br))
-                painter->drawLine(br.topLeft(), br.topRight());
+            if (bounds.intersects(br)) {
+                QLine line(br.topLeft(), br.topRight());
+                line.translate(0, -2);
+                painter->drawLine(line);
+            }
         }
         painter->setPen(oldPen);
         painter->setBrush(oldBrush);
@@ -274,7 +285,7 @@ void TextDocument::drawForeground(QPainter* painter, const QRect& bounds)
 
 void TextDocument::drawBackground(QPainter* painter, const QRect& bounds)
 {
-    if (d.highlights.isEmpty() && d.lowlights.isEmpty())
+    if (d.highlights.isEmpty() && d.lowlight == -1)
         return;
 
     const int margin = qCeil(documentMargin());
@@ -288,34 +299,19 @@ void TextDocument::drawBackground(QPainter* painter, const QRect& bounds)
     if (!highlightFrame)
         highlightFrame = new TextHighlight(static_cast<QWidget*>(painter->device()));
 
-    d.drawUb = d.ub > 1;
-    if (!d.lowlights.isEmpty()) {
+    if (d.lowlight != -1) {
         const QAbstractTextDocumentLayout* layout = documentLayout();
         const int margin = qCeil(documentMargin());
-        QMap<int, int>::const_iterator it;
-        for (it = d.lowlights.begin(); it != d.lowlights.end(); ++it) {
-            const QTextBlock from = findBlockByNumber(it.key());
-            const QTextBlock to = findBlockByNumber(it.value());
-            if (from.isValid() && to.isValid()) {
-                const QRect fr = layout->blockBoundingRect(from).toAlignedRect();
-                const QRect tr = layout->blockBoundingRect(to).toAlignedRect();
-                QRect br = fr.united(tr);
-                if (bounds.intersects(br)) {
-                    bool atBottom = false;
-                    if (to == lastBlock()) {
-                        if (qAbs(bounds.bottom() - br.bottom()) < qMin(fr.height(), tr.height()))
-                            atBottom = true;
-                    }
-                    if (atBottom)
-                        br.setBottom(bounds.bottom() + 1);
-                    br.adjust(-margin - 1, 0, margin + 1, 0);
-                    painter->translate(br.topLeft());
-                    lowlightFrame->setGeometry(br);
-                    lowlightFrame->render(painter);
-                    painter->translate(-br.topLeft());
-                    if (d.drawUb && d.ub - 1 >= it.key() && (it.value() == -1 || d.ub - 1 <= it.value()))
-                        d.drawUb = false;
-                }
+        const QTextBlock to = findBlockByNumber(d.lowlight);
+        if (to.isValid()) {
+            QRect br = layout->blockBoundingRect(to).toAlignedRect();
+            br.setTop(0);
+            if (bounds.intersects(br)) {
+                br.adjust(-margin - 1, 0, margin + 1, 2);
+                painter->translate(br.topLeft());
+                lowlightFrame->setGeometry(br);
+                lowlightFrame->render(painter);
+                painter->translate(-br.topLeft());
             }
         }
     }
@@ -335,6 +331,16 @@ void TextDocument::drawBackground(QPainter* painter, const QRect& bounds)
     }
 }
 
+QString TextDocument::tooltip(const QPoint& point) const
+{
+    const int pos = documentLayout()->hitTest(point, Qt::FuzzyHit);
+    const QTextBlock block = findBlock(pos);
+    TextBlockMessageData* blockData = static_cast<TextBlockMessageData*>(block.userData());
+    if (blockData)
+        return formatEvents(blockData->data.getEvents());
+    return QString();
+}
+
 void TextDocument::updateBlock(int number)
 {
     if (d.visible) {
@@ -349,19 +355,21 @@ void TextDocument::timerEvent(QTimerEvent* event)
     QTextDocument::timerEvent(event);
     if (event->timerId() == d.dirty) {
         delay -= 1000;
-        flushLines();
+        flush();
+    } else if (event->timerId() == d.rebuild) {
+        rebuild();
     }
 }
 
-void TextDocument::flushLines()
+void TextDocument::flush()
 {
-    if (!d.lines.isEmpty()) {
+    if (!d.queue.isEmpty()) {
         QTextCursor cursor(this);
         cursor.beginEditBlock();
-        foreach (TextBlockData* line, d.lines)
-            appendLine(cursor, line);
+        foreach (const MessageData& data, d.queue)
+            insert(cursor, data);
         cursor.endEditBlock();
-        d.lines.clear();
+        d.queue.clear();
     }
 
     if (d.dirty > 0) {
@@ -372,17 +380,20 @@ void TextDocument::flushLines()
 
 void TextDocument::receiveMessage(IrcMessage* message)
 {
-    append(d.formatter->formatMessage(message), message->timeStamp());
-    emit messageReceived(message);
+    MessageData data = formatMessage(message);
+    if (!data.isEmpty()) {
+        append(data);
+        emit messageReceived(message);
 
-    if (message->type() == IrcMessage::Private || message->type() == IrcMessage::Notice) {
-        if (!message->isOwn()) {
-            const bool contains = message->property("content").toString().contains(message->connection()->nickName(), Qt::CaseInsensitive);
-            if (contains) {
-                addHighlight(totalCount() - 1);
-                emit messageHighlighted(message);
-            } else if (!d.visible && message->property("private").toBool()) {
-                emit messageMissed(message);
+        if (message->type() == IrcMessage::Private || message->type() == IrcMessage::Notice) {
+            if (!message->isOwn()) {
+                const bool contains = message->property("content").toString().contains(message->connection()->nickName(), Qt::CaseInsensitive);
+                if (contains) {
+                    addHighlight(totalCount() - 1);
+                    emit messageHighlighted(message);
+                } else if (message->property("private").toBool()) {
+                    emit privateMessageReceived(message);
+                }
             }
         }
     }
@@ -390,59 +401,158 @@ void TextDocument::receiveMessage(IrcMessage* message)
 
 void TextDocument::rebuild()
 {
-    flushLines();
-    QTextBlock block = begin();
+    QList<MessageData> lines;
+    QTextBlock block = firstBlock();
     while (block.isValid()) {
-        TextBlockData* data = static_cast<TextBlockData*>(block.userData());
-        if (data)
-            d.lines += new TextBlockData(*data);
+        TextBlockMessageData* blockData = static_cast<TextBlockMessageData*>(block.userData());
+        if (blockData)
+            lines += blockData->data;
         block = block.next();
     }
     clear();
-    flushLines();
+    d.queue = lines;
+    flush();
+    if (d.rebuild > 0) {
+        killTimer(d.rebuild);
+        d.rebuild = 0;
+    }
 }
 
-void TextDocument::appendLine(QTextCursor& cursor, TextBlockData* line)
+void TextDocument::scheduleRebuild()
 {
-    const int count = blockCount();
+    if (d.rebuild < 0 && !isEmpty())
+        d.rebuild = startTimer(isVisible() ? 0 : 1000);
+}
+
+void TextDocument::shiftLights(int diff)
+{
+    QList<int>::iterator it = d.highlights.begin();
+    while (it != d.highlights.end()) {
+        *it -= diff;
+        if (*it < 0)
+            it = d.highlights.erase(it);
+        else
+            ++it;
+    }
+    d.lowlight -= diff;
+}
+
+void TextDocument::insert(QTextCursor& cursor, const MessageData& data)
+{
     cursor.movePosition(QTextCursor::End);
+
     if (!isEmpty()) {
+        const int count = blockCount();
         const int max = maximumBlockCount();
+        const QRectF br = documentLayout()->blockBoundingRect(findBlockByNumber(0));
         cursor.insertBlock();
+
         if (count >= max) {
-            const int diff = max - count + 1;
-            if (d.ub > 0)
-                d.ub -= diff;
-            QList<int>::iterator i;
-            for (i = d.highlights.begin(); i != d.highlights.end(); ++i) {
-                *i -= diff;
-                if (*i < 0)
-                    i = d.highlights.erase(i);
-            }
-            QMap<int, int> ll;
-            QMap<int, int>::const_iterator j;
-            for (j = d.lowlights.begin(); j != d.lowlights.end(); ++j) {
-                int from = j.key() - diff;
-                int to = j.value() - diff;
-                if (to > 0)
-                    ll.insert(qMax(0, from), to);
-            }
-            d.lowlights = ll;
+            emit lineRemoved(qRound(br.bottom()));
+            shiftLights(max - count + 1);
         }
     }
 
-    QString message = tr("<span class='timestamp'>%1</span> %2").arg(line->timestamp.time().toString(d.timeStampFormat)).arg(line->message);
-    cursor.insertHtml(message);
-
-    QTextBlock block = cursor.block();
-    block.setUserData(line);
+    cursor.insertHtml(formatBlock(data.timestamp(), data.format()));
+    cursor.block().setUserData(new TextBlockMessageData(data));
 
     QTextBlockFormat format = cursor.blockFormat();
-    format.setLineHeight(130, QTextBlockFormat::ProportionalHeight);
+    format.setLineHeight(125, QTextBlockFormat::ProportionalHeight);
     cursor.setBlockFormat(format);
+}
 
-    if (d.ub == -1 && !d.visible)
-        d.ub = count;
+MessageData TextDocument::formatMessage(IrcMessage* message) const
+{
+    MessageData data;
+    data.initFrom(message);
+    data.setFormat(d.formatter->formatMessage(message));
+    return data;
+}
+
+QString TextDocument::formatEvents(const QList<MessageData>& events) const
+{
+    EventFormatter formatter;
+    formatter.setBuffer(d.buffer);
+
+    QStringList lines;
+    foreach (const MessageData& event, events) {
+        if (!event.isEmpty()) {
+            IrcMessage* msg = IrcMessage::fromData(event.data(), d.buffer->connection());
+            lines += formatBlock(event.timestamp(), formatter.formatMessage(msg));
+            delete msg;
+        }
+    }
+    if (!lines.isEmpty())
+        return tr("<html><head><style>%1</style></head><body>%2</body></html>").arg(d.css, lines.join(tr("<br/>")));
+    return QString();
+}
+
+QString TextDocument::formatSummary(const QList<MessageData>& events) const
+{
+    QStringList actions;
+    QStringList changes;
+    QSet<QString> nicks;
+    QSet<IrcMessage::Type> handled;
+    EventFormatter formatter;
+
+    foreach (const MessageData& event, events) {
+        switch (event.type()) {
+        case IrcMessage::Join:
+            if (!handled.contains(event.type()))
+                actions += tr("joined");
+            break;
+        case IrcMessage::Part:
+            if (!handled.contains(event.type()))
+                actions += tr("left");
+            break;
+        case IrcMessage::Quit:
+            if (!handled.contains(event.type()))
+                actions += tr("quit");
+            break;
+        case IrcMessage::Kick:
+            if (!handled.contains(event.type()))
+                actions += tr("kicked");
+            break;
+        case IrcMessage::Nick:
+            if (!handled.contains(event.type()))
+                changes += tr("nick");
+            break;
+        case IrcMessage::Mode:
+            if (!handled.contains(event.type()))
+                changes += tr("mode");
+            break;
+        case IrcMessage::Topic:
+            if (!handled.contains(event.type()))
+                changes += tr("topic");
+            break;
+        default:
+            break;
+        }
+        nicks.insert(event.nick());
+        handled.insert(event.type());
+    }
+
+    if (!changes.isEmpty())
+        actions += tr("changed %1").arg(changes.join(tr(" and ")));
+
+    if (actions.count() > 2)
+        actions = QStringList() << QStringList(actions.mid(0, actions.count() - 1)).join(tr(", ")) << actions.last();
+
+    if (nicks.count() == 1)
+        return formatter.formatEvent(tr("%1 %2").arg(formatter.styledText(*nicks.begin(), MessageFormatter::Bold),
+                                                     actions.join(tr(" and "))));
+
+    return formatter.formatEvent(tr("%1 %2").arg(formatter.styledText(tr("%1 users").arg(nicks.count()), MessageFormatter::Bold),
+                                                 actions.join(tr(" or "))));
+}
+
+QString TextDocument::formatBlock(const QDateTime& timestamp, const QString& message) const
+{
+    if (message.isEmpty())
+        return QString();
+
+    const QString time = timestamp.time().toString(d.timeStampFormat);
+    return tr("<span class='timestamp'>%1</span> %2").arg(time, message);
 }
 
 #include "textdocument.moc"

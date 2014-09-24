@@ -12,33 +12,37 @@
 * GNU General Public License for more details.
 */
 
-#ifndef THEMEINFO_H
-#define THEMEINFO_H
+#ifndef SYSTEMMONITOR_H
+#define SYSTEMMONITOR_H
 
-#include <QString>
+#include <QObject>
 
-class ThemeInfo
+class SystemMonitorPrivate;
+
+class SystemMonitor : public QObject
 {
-public:
-    bool isValid() const;
-    bool load(const QString& filePath);
+    Q_OBJECT
 
-    QString name() const;
-    QString author() const;
-    QString version() const;
-    QString description() const;
-    QString style() const;
-    QString gtkTheme() const;
+public:
+    SystemMonitor(QObject* parent = 0);
+    ~SystemMonitor();
+
+signals:
+    void wake();
+    void sleep();
+    void online();
+    void offline();
+    void screenLocked();
+    void screenUnlocked();
+    void screenSaverStarted();
+    void screenSaverStopped();
+
+protected:
+    void initialize();
+    void uninitialize();
 
 private:
-    struct Private {
-        QString name;
-        QString author;
-        QString version;
-        QString description;
-        QString style;
-        QString gtkTheme;
-    } d;
+    SystemMonitorPrivate* d;
 };
 
-#endif // THEMEINFO_H
+#endif // SYSTEMMONITOR_H

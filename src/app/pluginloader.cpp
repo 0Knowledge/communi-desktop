@@ -23,13 +23,24 @@ static QObjectList loadPlugins(const QStringList& paths)
 {
     QObjectList instances;
     foreach (const QString& path, paths) {
-        QDir dir(path);
-        if (dir.cd("communi")) {
-            foreach (const QFileInfo& file, dir.entryInfoList()) {
-                QPluginLoader loader(file.absoluteFilePath());
-                if (loader.load())
-                    instances += loader.instance();
-            }
+        foreach (const QFileInfo& file, QDir(path).entryInfoList(QDir::Files)) {
+            const QString base = file.baseName();
+            // blacklisted obsolete plugin
+            if (base.startsWith("monitorplugin") || base.startsWith("libmonitorplugin"))
+                continue;
+#if defined(Q_OS_WIN)
+            // avoid loading undesired files from %QTDIR%\bin
+            if (base.startsWith("Qt5") || base.startsWith("Irc") || base.startsWith("Enginio")
+                    || base.startsWith("icu") || file.suffix() != "dll")
+                continue;
+#elif defined(Q_OS_UNIX)
+            // avoid trying to load the whole /usr/bin
+            if (!base.startsWith("lib"))
+                continue;
+#endif
+            QPluginLoader loader(file.absoluteFilePath());
+            if (loader.load())
+                instances += loader.instance();
         }
     }
     return instances;
@@ -44,14 +55,11 @@ static QObjectList pluginInstances()
 QStringList PluginLoader::paths()
 {
     QStringList lst;
-#if defined(Q_OS_MAC)
+    lst += COMMUNI_INSTALL_PLUGINS;
+#ifdef Q_OS_MAC
     QDir dir(QApplication::applicationFilePath());
     if (dir.cd("../../PlugIns"))
         lst += dir.absolutePath();
-#elif defined(Q_OS_WIN)
-    // TODO
-#elif defined(Q_OS_UNIX)
-    // TODO
 #endif
     return lst;
 }

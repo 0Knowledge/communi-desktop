@@ -12,23 +12,38 @@
 * GNU General Public License for more details.
 */
 
-#ifndef MONITORPLUGIN_H
-#define MONITORPLUGIN_H
+#ifndef FILTERPLUGIN_H
+#define FILTERPLUGIN_H
 
-#include <QObject>
+#include <QPair>
+#include <QHash>
+#include <QString>
 #include <QtPlugin>
+#include <QDateTime>
+#include <IrcCommandFilter>
+#include <IrcMessageFilter>
 #include "connectionplugin.h"
 
-class MonitorPlugin : public QObject, public ConnectionPlugin
+class FilterPlugin : public QObject, public ConnectionPlugin, public IrcMessageFilter, public IrcCommandFilter
 {
     Q_OBJECT
-    Q_INTERFACES(ConnectionPlugin)
+    Q_INTERFACES(ConnectionPlugin IrcCommandFilter IrcMessageFilter)
     Q_PLUGIN_METADATA(IID "Communi.ConnectionPlugin")
 
 public:
-    MonitorPlugin(QObject* parent = 0);
+    FilterPlugin(QObject* parent = 0);
 
     void connectionAdded(IrcConnection* connection);
+    void connectionRemoved(IrcConnection* connection);
+
+    bool commandFilter(IrcCommand* command);
+    bool messageFilter(IrcMessage* message);
+
+private:
+    struct Private {
+        QHash<int, QPair<QDateTime, QString> > sentCommands;
+        QHash<QString, QPair<QDateTime, QString> > awayReplies;
+    } d;
 };
 
-#endif // MONITORPLUGIN_H
+#endif // FILTERPLUGIN_H

@@ -57,8 +57,8 @@ signals:
     void currentViewChanged(BufferView* view);
     void currentBufferChanged(IrcBuffer* buffer);
 
-    void messageMissed(IrcMessage* message);
     void messageHighlighted(IrcMessage* message);
+    void privateMessageReceived(IrcMessage* message);
 
 protected:
     bool commandFilter(IrcCommand* command);
@@ -69,8 +69,10 @@ private slots:
     void addView(BufferView* view);
     void removeView(BufferView* view);
     void setupDocument(TextDocument* document);
+    void onCurrentBufferChanged(IrcBuffer* buffer);
     void onCurrentViewChanged(BufferView* current, BufferView* previous);
     void onSocketError();
+    void onSecureError();
 
 private:
     static IrcCommandParser* createParser(QObject* parent);
