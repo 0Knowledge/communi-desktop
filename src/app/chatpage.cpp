@@ -1,17 +1,36 @@
 /*
- * Copyright (C) 2008-2014 The Communi Project
- *
- * This example is free, and not covered by the LGPL license. There is no
- * restriction applied to their modification, redistribution, using and so on.
- * You can study them, modify them, use them in your own program - either
- * completely or partially.
- */
+  Copyright (C) 2008-2014 The Communi Project
+
+  You may use this file under the terms of BSD license as follows:
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR
+  ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
 
 #include "chatpage.h"
 #include "treeitem.h"
+#include "treerole.h"
 #include "treewidget.h"
 #include "themeloader.h"
-#include "windowtheme.h"
 #include "textdocument.h"
 #include "pluginloader.h"
 #include "textbrowser.h"
@@ -101,7 +120,11 @@ void ChatPage::setTheme(const QString& theme)
             setupDocument(doc);
         foreach (BufferView* view, d.splitView->views())
             view->titleBar()->setStyleSheet(d.theme.style());
-        WindowTheme::setTheme(window(), d.theme);
+        window()->setStyleSheet(d.theme.style());
+
+        // TODO: because of theme preview
+        if (window()->inherits("QMainWindow"))
+            PluginLoader::instance()->themeChanged(d.theme);
     }
 }
 
@@ -134,6 +157,17 @@ QByteArray ChatPage::saveState() const
     state.insert("views", d.splitView->saveState());
     state.insert("tree", d.treeWidget->saveState());
 
+    QVariantMap timestamps;
+    foreach (TextDocument* doc, d.documents) {
+        if (doc->timestamp().isValid()) {
+            IrcBuffer* buffer = doc->buffer();
+            QString id = buffer->connection()->userData().value("uuid").toString();
+            id += "/" + buffer->title();
+            timestamps[id] = doc->timestamp();
+        }
+    }
+    state.insert("timestamps", timestamps);
+
     QByteArray data;
     QDataStream out(&data, QIODevice::WriteOnly);
     out << state;
@@ -152,6 +186,8 @@ void ChatPage::restoreState(const QByteArray& data)
         QSplitter::restoreState(state.value("splitter").toByteArray());
     if (state.contains("views"))
         d.splitView->restoreState(state.value("views").toByteArray());
+
+    d.timestamps = state.value("timestamps").toMap();
 
     // restore server buffers
     QList<IrcConnection*> connections = findChildren<IrcConnection*>();
@@ -219,14 +255,21 @@ bool ChatPage::commandFilter(IrcCommand* command)
             d.splitView->setCurrentBuffer(buffer);
             return true;
         } else if (cmd == "SET") {
-            const QString key = params.value(0);
-            const QString value = params.value(1);
+            const QString key = params.value(0).toLower();
+            const QString value = QStringList(params.mid(1)).join(" ");
             if (!key.compare("timestamp", Qt::CaseInsensitive)) {
                 if (d.timestamp != value) {
                     d.timestamp = value;
                     foreach (TextDocument* doc, d.documents)
                         doc->setTimeStampFormat(value);
                 }
+            } else if (!key.compare("font")) {
+                QFont f = d.splitView->currentView()->textBrowser()->font();
+                if (value.isEmpty())
+                    f.setFamily(font().family());
+                else
+                    f.setFamily(value);
+                d.splitView->currentView()->textBrowser()->setFont(f);
             }
             return true;
         }
@@ -238,6 +281,9 @@ void ChatPage::addConnection(IrcConnection* connection)
 {
     IrcBufferModel* bufferModel = new IrcBufferModel(connection);
     bufferModel->setSortMethod(Irc::SortByTitle);
+    // give bouncers 2 seconds to start joining channels, otherwise a
+    // non-bouncer connection is assumed and model state is restored
+    bufferModel->setJoinDelay(2);
 
     IrcBuffer* serverBuffer = bufferModel->add(connection->displayName());
     serverBuffer->setSticky(true);
@@ -246,6 +292,7 @@ void ChatPage::addConnection(IrcConnection* connection)
     connect(bufferModel, SIGNAL(added(IrcBuffer*)), this, SLOT(addBuffer(IrcBuffer*)));
     connect(connection, SIGNAL(socketError(QAbstractSocket::SocketError)), this, SLOT(onSocketError()));
     connect(connection, SIGNAL(secureError()), this, SLOT(onSecureError()));
+    connect(connection, SIGNAL(connected()), this, SLOT(onConnected()));
 
     MessageHandler* handler = new MessageHandler(bufferModel);
     handler->setDefaultBuffer(serverBuffer);
@@ -297,6 +344,10 @@ void ChatPage::addBuffer(IrcBuffer* buffer)
 
     PluginLoader::instance()->bufferAdded(buffer);
 
+    QString id = buffer->connection()->userData().value("uuid").toString();
+    id += "/" + buffer->title();
+    doc->setTimestamp(d.timestamps.value(id).toDateTime());
+
     setupDocument(doc);
     PluginLoader::instance()->documentAdded(doc);
 
@@ -332,10 +383,9 @@ void ChatPage::setupDocument(TextDocument* document)
     document->setTimeStampFormat(d.timestamp);
     document->setStyleSheet(d.theme.style());
 
-    if (!document->isClone()) {
-        connect(document, SIGNAL(messageHighlighted(IrcMessage*)), this, SIGNAL(messageHighlighted(IrcMessage*)));
-        connect(document, SIGNAL(privateMessageReceived(IrcMessage*)), this, SIGNAL(privateMessageReceived(IrcMessage*)));
-    }
+    connect(document, SIGNAL(messageReceived(IrcMessage*)), this, SLOT(onMessageReceived(IrcMessage*)));
+    connect(document, SIGNAL(messageHighlighted(IrcMessage*)), this, SLOT(onAlert(IrcMessage*)));
+    connect(document, SIGNAL(privateMessageReceived(IrcMessage*)), this, SLOT(onAlert(IrcMessage*)));
 }
 
 void ChatPage::addView(BufferView* view)
@@ -375,6 +425,43 @@ void ChatPage::onCurrentViewChanged(BufferView* current, BufferView* previous)
     d.finder->cancelListSearch(previous);
     d.finder->cancelBrowserSearch(previous);
     emit currentViewChanged(current);
+}
+
+void ChatPage::onMessageReceived(IrcMessage* message)
+{
+    if (message->type() == IrcMessage::Private || message->type() == IrcMessage::Notice) {
+        TextDocument* doc = qobject_cast<TextDocument*>(sender());
+        if (doc && !doc->isClone()) {
+            IrcBuffer* buffer = doc->buffer();
+            TreeItem* item = d.treeWidget->bufferItem(buffer);
+            if (buffer && item != d.treeWidget->currentItem()) {
+                bool visible = false;
+                foreach (TextDocument* doc, buffer->findChildren<TextDocument*>()) {
+                    if (doc->isVisible()) {
+                        visible = true;
+                        break;
+                    }
+                }
+                // exclude broadcasted global notices
+                if (!visible && message->property("target") != "$$*")
+                    item->setData(1, TreeRole::Badge, item->data(1, TreeRole::Badge).toInt() + 1);
+            }
+        }
+    }
+}
+
+void ChatPage::onAlert(IrcMessage* message)
+{
+    if (message->type() == IrcMessage::Private || message->type() == IrcMessage::Notice) {
+        emit alert(message);
+        TextDocument* doc = qobject_cast<TextDocument*>(sender());
+        if (doc && !doc->isVisible()) {
+            IrcBuffer* buffer = doc->buffer();
+            TreeItem* item = d.treeWidget->bufferItem(buffer);
+            if (buffer && item != d.treeWidget->currentItem())
+                d.treeWidget->highlightItem(item);
+        }
+    }
 }
 
 void ChatPage::onSocketError()
@@ -417,6 +504,16 @@ void ChatPage::onSecureError()
     }
 }
 
+void ChatPage::onConnected()
+{
+    IrcConnection* connection = qobject_cast<IrcConnection*>(sender());
+    if (connection) {
+        TreeItem* item = d.treeWidget->connectionItem(connection);
+        if (item)
+            d.treeWidget->unhighlightItem(item);
+    }
+}
+
 IrcCommandParser* ChatPage::createParser(QObject *parent)
 {
     IrcCommandParser* parser = new IrcCommandParser(parent);
@@ -449,7 +546,7 @@ IrcCommandParser* ChatPage::createParser(QObject *parent)
     parser->addCommand(IrcCommand::Trace, "TRACE (<target>)");
     parser->addCommand(IrcCommand::Users, "USERS (<server>)");
     parser->addCommand(IrcCommand::Version, "VERSION (<user>)");
-    parser->addCommand(IrcCommand::Who, "WHO <user>");
+    parser->addCommand(IrcCommand::Who, "WHO <mask>");
     parser->addCommand(IrcCommand::Whois, "WHOIS <user>");
     parser->addCommand(IrcCommand::Whowas, "WHOWAS <user>");
 
@@ -457,7 +554,7 @@ IrcCommandParser* ChatPage::createParser(QObject *parent)
     parser->addCommand(IrcCommand::Custom, "CLOSE");
     parser->addCommand(IrcCommand::Custom, "MSG <user/channel> <message...>");
     parser->addCommand(IrcCommand::Custom, "QUERY <user> (<message...>)");
-    parser->addCommand(IrcCommand::Custom, "SET <key> (<value>)");
+    parser->addCommand(IrcCommand::Custom, "SET <key> (<value...>)");
 
     return parser;
 }

@@ -1,15 +1,35 @@
 /*
- * Copyright (C) 2008-2014 The Communi Project
- *
- * This example is free, and not covered by the LGPL license. There is no
- * restriction applied to their modification, redistribution, using and so on.
- * You can study them, modify them, use them in your own program - either
- * completely or partially.
- */
+  Copyright (C) 2008-2014 The Communi Project
+
+  You may use this file under the terms of BSD license as follows:
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR
+  ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
 
 #include "mainwindow.h"
 #include "settingspage.h"
 #include "systemmonitor.h"
+#include "pluginloader.h"
 #include "textdocument.h"
 #include "connectpage.h"
 #include "bufferview.h"
@@ -81,8 +101,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(shortcut, SIGNAL(activated()), d.chatPage, SLOT(closeBuffer()));
 
     d.dock = new Dock(this);
-    connect(d.chatPage, SIGNAL(messageHighlighted(IrcMessage*)), d.dock, SLOT(alert(IrcMessage*)));
-    connect(d.chatPage, SIGNAL(privateMessageReceived(IrcMessage*)), d.dock, SLOT(alert(IrcMessage*)));
+    connect(d.chatPage, SIGNAL(alert(IrcMessage*)), d.dock, SLOT(alert(IrcMessage*)));
 
     d.monitor = new SystemMonitor(this);
     connect(d.monitor, SIGNAL(screenLocked()), d.dock, SLOT(activateAlert()));
@@ -90,15 +109,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(d.monitor, SIGNAL(screenSaverStarted()), d.dock, SLOT(activateAlert()));
     connect(d.monitor, SIGNAL(screenSaverStopped()), d.dock, SLOT(deactivateAlert()));
 
-#ifdef Q_OS_MAC
-    QMenu* menu = new QMenu(this);
-    menuBar()->addMenu(menu);
-
-    QAction* action = new QAction(tr("Preferences"), this);
-    action->setMenuRole(QAction::PreferencesRole);
-    connect(action, SIGNAL(triggered()), this, SLOT(showSettings()));
-    menu->addAction(action);
-#endif // Q_OS_MAC
+    PluginLoader::instance()->windowCreated(this);
 
     restoreState();
 
@@ -108,6 +119,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
 MainWindow::~MainWindow()
 {
+    PluginLoader::instance()->windowDestroyed(this);
 }
 
 void MainWindow::saveState()
@@ -142,10 +154,9 @@ void MainWindow::restoreState()
         IrcConnection* connection = new IrcConnection(d.chatPage);
         connection->restoreState(state.value("connection").toByteArray());
         addConnection(connection);
-        if (state.contains("model") && connection->isEnabled()) {
-            connection->setProperty("__modelState__", state.value("model").toByteArray());
-            connect(connection, SIGNAL(connected()), this, SLOT(delayedRestoreConnection()));
-        }
+        IrcBufferModel* model = connection->findChild<IrcBufferModel*>();
+        if (model)
+            model->restoreState(state.value("model").toByteArray());
     }
 
     d.chatPage->restoreState(settings.value("state").toByteArray());
@@ -176,6 +187,16 @@ void MainWindow::addConnection(IrcConnection* connection)
         ud.insert("uuid", QUuid::createUuid());
         connection->setUserData(ud);
     }
+
+    connection->setReconnectDelay(10);
+
+    // backwards compatibility
+    if (connection->nickNames().isEmpty())
+        connection->setNickNames(QStringList() << connection->nickName());
+    if (connection->servers().isEmpty())
+        connection->setServers(QStringList() << QString("%1 %2%3").arg(connection->host())
+                                                                  .arg(connection->isSecure() ? "+" : "")
+                                                                  .arg(connection->port()));
 
     connect(d.monitor, SIGNAL(wake()), connection, SLOT(open()));
     connect(d.monitor, SIGNAL(online()), connection, SLOT(open()));
@@ -271,10 +292,8 @@ void MainWindow::onEditAccepted()
     ConnectPage* page = qobject_cast<ConnectPage*>(sender());
     if (page) {
         IrcConnection* connection = page->connection();
-        connection->setHost(page->host());
-        connection->setPort(page->port());
-        connection->setSecure(page->isSecure());
-        connection->setNickName(page->nickName());
+        connection->setServers(page->servers());
+        connection->setNickNames(page->nickNames());
         connection->setRealName(page->realName());
         connection->setUserName(page->userName());
         connection->setDisplayName(page->displayName());
@@ -289,10 +308,8 @@ void MainWindow::onConnectAccepted()
     ConnectPage* page = qobject_cast<ConnectPage*>(sender());
     if (page) {
         IrcConnection* connection = new IrcConnection(d.chatPage);
-        connection->setHost(page->host());
-        connection->setPort(page->port());
-        connection->setSecure(page->isSecure());
-        connection->setNickName(page->nickName());
+        connection->setServers(page->servers());
+        connection->setNickNames(page->nickNames());
         connection->setRealName(page->realName());
         connection->setUserName(page->userName());
         connection->setDisplayName(page->displayName());
@@ -350,40 +367,11 @@ void MainWindow::editConnection(IrcConnection* connection)
     ConnectPage* page = new ConnectPage(connection, this);
     connect(page, SIGNAL(accepted()), this, SLOT(onEditAccepted()));
     connect(page, SIGNAL(rejected()), this, SLOT(pop()));
-    page->setHost(connection->host());
-    page->setPort(connection->port());
-    page->setSecure(connection->isSecure());
-    page->setNickName(connection->nickName());
+    page->setServers(connection->servers());
+    page->setNickNames(connection->nickNames());
     page->setRealName(connection->realName());
     page->setUserName(connection->userName());
     page->setDisplayName(connection->displayName());
     page->setPassword(connection->password());
     push(page);
-}
-
-void MainWindow::restoreConnection(IrcConnection* connection)
-{
-    if (!connection && !d.restoredConnections.isEmpty())
-        connection = d.restoredConnections.dequeue();
-    if (connection && connection->isConnected()) {
-        QByteArray state = connection->property("__modelState__").toByteArray();
-        if (!state.isNull()) {
-            IrcBufferModel* model = connection->findChild<IrcBufferModel*>();
-            if (model && model->count() == 1)
-                model->restoreState(state);
-        }
-        connection->setProperty("__modelState__", QVariant());
-    }
-}
-
-void MainWindow::delayedRestoreConnection()
-{
-    IrcConnection* connection = qobject_cast<IrcConnection*>(sender());
-    if (connection) {
-        // give bouncers 1 second to start joining channels, otherwise a
-        // non-bouncer connection is assumed and model state is restored
-        disconnect(connection, SIGNAL(connected()), this, SLOT(delayedRestoreConnection()));
-        QTimer::singleShot(1000, this, SLOT(restoreConnection()));
-        d.restoredConnections.enqueue(connection);
-    }
 }

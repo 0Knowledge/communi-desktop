@@ -18,7 +18,6 @@ mac:LIBS += -framework AppKit -framework SystemConfiguration
 else:win32:LIBS += -lole32 -luuid
 else:unix:QT += dbus
 qtHaveModule(multimedia):QT += multimedia
-qtHaveModule(x11extras):QT += x11extras
 
 load(communi_installs.prf)
 isEmpty(COMMUNI_INSTALL_BINS):error(COMMUNI_INSTALL_BINS empty!)
@@ -40,7 +39,9 @@ mac {
     ICON = ../../images/communi.icns
     QMAKE_INFO_PLIST = ../../communi.plist
 
+    plugins.files += $$BUILD_TREE/plugins/libawayplugin.$$QMAKE_EXTENSION_SHLIB
     plugins.files += $$BUILD_TREE/plugins/libfilterplugin.$$QMAKE_EXTENSION_SHLIB
+    plugins.files += $$BUILD_TREE/plugins/libosxplugin.$$QMAKE_EXTENSION_SHLIB
     plugins.files += $$BUILD_TREE/plugins/libverifierplugin.$$QMAKE_EXTENSION_SHLIB
     plugins.files += $$BUILD_TREE/plugins/libzncplugin.$$QMAKE_EXTENSION_SHLIB
     plugins.path = Contents/PlugIns

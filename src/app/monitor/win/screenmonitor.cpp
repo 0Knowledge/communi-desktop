@@ -1,15 +1,29 @@
 /*
-* Copyright (C) 2008-2014 The Communi Project
-*
-* This program is free software; you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation; either version 2 of the License, or
-* (at your option) any later version.
-*
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
+  Copyright (C) 2008-2014 The Communi Project
+
+  You may use this file under the terms of BSD license as follows:
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR
+  ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 /*
@@ -28,8 +42,8 @@
 #include <QtDebug>
 
 static const struct SensEvents {
-    BSTR method;
-    BSTR uuid;
+    const wchar_t* method;
+    const wchar_t* uuid;
 } sensEvents[] = {
     { L"DisplayLock",       L"{B7E2C510-501A-4961-938F-A458970930D7}" },
     { L"DisplayUnlock",     L"{11305987-8FFC-41AD-A264-991BD5B7488A}" },
@@ -37,7 +51,7 @@ static const struct SensEvents {
     { L"StopScreenSaver",   L"{F53426BC-412F-41E8-9A5F-E5FA8A164BD6}" }
 };
 
-static const BSTR SENSGUID_EVENTCLASS_LOGON = L"{d5978630-5b9f-11d1-8dd2-00aa004abd5e}";
+static const wchar_t* SENSGUID_EVENTCLASS_LOGON = L"{d5978630-5b9f-11d1-8dd2-00aa004abd5e}";
 
 #ifdef Q_CC_MINGW
 const GUID IID_ISensLogon = {0xd597bab3, 0x5b9f, 0x11d1, {0x8d,0xd2,0x00,0xaa,0x00,0x4a,0xbd,0x5e}};
@@ -47,6 +61,11 @@ const GUID IID_IEventSubscription = {0x4A6B0E15, 0x2E38, 0x11D1, {0x99,0x65,0x00
 const GUID CLSID_CEventSubscription = {0x7542e960, 0x79c7, 0x11d1, {0x88,0xf9,0x00,0x80,0xc7,0xd7,0x71,0xbf}};
 #endif
 
+#define BSTR_CALL(Method, Arg) \
+    bstr = SysAllocString(Arg); \
+    hr = Method; \
+    SysFreeString(bstr);
+
 ScreenMonitor::ScreenMonitor() : refcount(0), eventSystem(NULL)
 {
     HRESULT hr = CoInitialize(NULL);
@@ -55,6 +74,7 @@ ScreenMonitor::ScreenMonitor() : refcount(0), eventSystem(NULL)
                               IID_IEventSystem, (LPVOID*)&eventSystem);
         if (SUCCEEDED(hr)) {
             eventSystem->AddRef();
+            BSTR bstr = NULL;
             IEventSubscription* subscription = NULL;
             for (int i = 0; i < 4; ++i) {
                 hr = CoCreateInstance(CLSID_CEventSubscription, NULL, CLSCTX_SERVER,
@@ -62,7 +82,7 @@ ScreenMonitor::ScreenMonitor() : refcount(0), eventSystem(NULL)
                 if (FAILED(hr))
                     continue;
 
-                hr = subscription->put_EventClassID(SENSGUID_EVENTCLASS_LOGON);
+                BSTR_CALL(subscription->put_EventClassID(bstr), SENSGUID_EVENTCLASS_LOGON)
                 if (FAILED(hr))
                     continue;
 
@@ -70,15 +90,15 @@ ScreenMonitor::ScreenMonitor() : refcount(0), eventSystem(NULL)
                 if (FAILED(hr))
                     continue;
 
-                hr = subscription->put_MethodName(sensEvents[i].method);
+                BSTR_CALL(subscription->put_MethodName(bstr), sensEvents[i].method)
                 if (FAILED(hr))
                     continue;
 
-                hr = subscription->put_SubscriptionName(sensEvents[i].method);
+                BSTR_CALL(subscription->put_SubscriptionName(bstr), sensEvents[i].method)
                 if (FAILED(hr))
                     continue;
 
-                hr = subscription->put_SubscriptionID(sensEvents[i].uuid);
+                BSTR_CALL(subscription->put_SubscriptionID(bstr), sensEvents[i].uuid)
                 if (FAILED(hr))
                     continue;
 
@@ -86,7 +106,7 @@ ScreenMonitor::ScreenMonitor() : refcount(0), eventSystem(NULL)
                 if (FAILED(hr))
                     continue;
 
-                hr = eventSystem->Store(PROGID_EventSubscription, (IUnknown*)subscription);
+                BSTR_CALL(eventSystem->Store(bstr, (IUnknown*)subscription), PROGID_EventSubscription)
                 if (FAILED(hr))
                     break;
 

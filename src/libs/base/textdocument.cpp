@@ -1,15 +1,29 @@
 /*
-* Copyright (C) 2008-2014 The Communi Project
-*
-* This program is free software; you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation; either version 2 of the License, or
-* (at your option) any later version.
-*
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
+  Copyright (C) 2008-2014 The Communi Project
+
+  You may use this file under the terms of BSD license as follows:
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR
+  ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "textdocument.h"
@@ -85,6 +99,7 @@ TextDocument::TextDocument(IrcBuffer* buffer) : QTextDocument(buffer)
     d.visible = false;
 
     d.formatter = new MessageFormatter(this);
+    connect(d.formatter, SIGNAL(formatted(MessageData)), this, SLOT(append(MessageData)));
     d.formatter->setBuffer(buffer);
 
     setUndoRedoEnabled(false);
@@ -179,9 +194,25 @@ void TextDocument::setVisible(bool visible)
                 flush();
         } else {
             d.uc = 0;
+            if (TextBlockMessageData* block = static_cast<TextBlockMessageData*>(lastBlock().userData()))
+                d.timestamp = block->data.timestamp();
         }
         d.visible = visible;
     }
+}
+
+QDateTime TextDocument::timestamp() const
+{
+    if (d.visible) {
+        if (TextBlockMessageData* block = static_cast<TextBlockMessageData*>(lastBlock().userData()))
+            return block->data.timestamp();
+    }
+    return d.timestamp;
+}
+
+void TextDocument::setTimestamp(const QDateTime& timestamp)
+{
+    d.timestamp = timestamp;
 }
 
 void TextDocument::lowlight(int block)
@@ -237,7 +268,10 @@ void TextDocument::append(const MessageData& data)
             if (!d.queue.isEmpty())
                 d.queue.replace(d.queue.count() - 1, msg);
         } else {
-            ++d.uc;
+            if (d.timestamp < data.timestamp())
+                ++d.uc;
+            else
+                d.uc = 0;
         }
         if (d.dirty == 0 || d.visible) {
             QTextCursor cursor(this);
@@ -380,18 +414,22 @@ void TextDocument::flush()
 
 void TextDocument::receiveMessage(IrcMessage* message)
 {
-    MessageData data = formatMessage(message);
+    MessageData data = d.formatter->formatMessage(message);
     if (!data.isEmpty()) {
         append(data);
-        emit messageReceived(message);
+
+        bool unseen = d.timestamp < message->timeStamp();
+        if (unseen)
+            emit messageReceived(message);
 
         if (message->type() == IrcMessage::Private || message->type() == IrcMessage::Notice) {
             if (!message->isOwn()) {
                 const bool contains = message->property("content").toString().contains(message->connection()->nickName(), Qt::CaseInsensitive);
                 if (contains) {
                     addHighlight(totalCount() - 1);
-                    emit messageHighlighted(message);
-                } else if (message->property("private").toBool()) {
+                    if (unseen)
+                        emit messageHighlighted(message);
+                } else if (unseen && message->property("private").toBool()) {
                     emit privateMessageReceived(message);
                 }
             }
@@ -461,14 +499,6 @@ void TextDocument::insert(QTextCursor& cursor, const MessageData& data)
     cursor.setBlockFormat(format);
 }
 
-MessageData TextDocument::formatMessage(IrcMessage* message) const
-{
-    MessageData data;
-    data.initFrom(message);
-    data.setFormat(d.formatter->formatMessage(message));
-    return data;
-}
-
 QString TextDocument::formatEvents(const QList<MessageData>& events) const
 {
     EventFormatter formatter;
@@ -478,12 +508,12 @@ QString TextDocument::formatEvents(const QList<MessageData>& events) const
     foreach (const MessageData& event, events) {
         if (!event.isEmpty()) {
             IrcMessage* msg = IrcMessage::fromData(event.data(), d.buffer->connection());
-            lines += formatBlock(event.timestamp(), formatter.formatMessage(msg));
+            lines += formatBlock(event.timestamp(), formatter.formatMessage(msg).format());
             delete msg;
         }
     }
     if (!lines.isEmpty())
-        return tr("<html><head><style>%1</style></head><body>%2</body></html>").arg(d.css, lines.join(tr("<br/>")));
+        return tr("<html><head><style>%1</style></head><body style='white-space:pre'>%2</body></html>").arg(d.css, lines.join(tr("<br/>")));
     return QString();
 }
 
@@ -506,8 +536,16 @@ QString TextDocument::formatSummary(const QList<MessageData>& events) const
                 actions += tr("left");
             break;
         case IrcMessage::Quit:
-            if (!handled.contains(event.type()))
-                actions += tr("quit");
+            if (event.isError()) {
+                if (!handled.contains(IrcMessage::Error))
+                    actions += tr("disconnected");
+                nicks.insert(event.nick());
+                handled.insert(IrcMessage::Error);
+                continue;
+            } else {
+                if (!handled.contains(event.type()))
+                    actions += tr("quit");
+            }
             break;
         case IrcMessage::Kick:
             if (!handled.contains(event.type()))

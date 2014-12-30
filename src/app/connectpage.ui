@@ -31,7 +31,7 @@
      <item row="1" column="1">
       <widget class="QLabel" name="sloganLabel">
        <property name="text">
-        <string>&lt;small&gt;Communi is a simple and light-weight cross-platform IRC client.&lt;/small&gt;</string>
+        <string>&lt;small&gt;Communi is a simple and elegant cross-platform IRC client.&lt;/small&gt;</string>
        </property>
        <property name="alignment">
         <set>Qt::AlignRight|Qt::AlignTop|Qt::AlignTrailing</set>
@@ -121,64 +121,30 @@
            </widget>
           </item>
           <item row="1" column="0">
-           <widget class="QLabel" name="hostLabel">
+           <widget class="QLabel" name="serverLabel">
             <property name="text">
-             <string>&amp;Host:</string>
+             <string>&amp;Servers:</string>
             </property>
             <property name="buddy">
-             <cstring>hostField</cstring>
+             <cstring>serverField</cstring>
             </property>
            </widget>
           </item>
           <item row="1" column="1">
-           <widget class="QLineEdit" name="hostField">
-            <property name="inputMethodHints">
-             <set>Qt::ImhUrlCharactersOnly</set>
+           <widget class="QPlainTextEdit" name="serverField">
+            <property name="verticalScrollBarPolicy">
+             <enum>Qt::ScrollBarAlwaysOff</enum>
             </property>
-            <property name="placeholderText">
-             <string>irc.freenode.net</string>
+            <property name="horizontalScrollBarPolicy">
+             <enum>Qt::ScrollBarAlwaysOff</enum>
             </property>
-           </widget>
-          </item>
-          <item row="2" column="0">
-           <widget class="QLabel" name="portLabel">
-            <property name="text">
-             <string>&amp;Port:</string>
+            <property name="tabChangesFocus">
+             <bool>true</bool>
             </property>
-            <property name="buddy">
-             <cstring>portField</cstring>
+            <property name="lineWrapMode">
+             <enum>QPlainTextEdit::NoWrap</enum>
             </property>
            </widget>
-          </item>
-          <item row="2" column="1">
-           <layout class="QHBoxLayout" name="portLayout">
-            <item>
-             <widget class="QSpinBox" name="portField">
-              <property name="sizePolicy">
-               <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
-                <horstretch>1</horstretch>
-                <verstretch>0</verstretch>
-               </sizepolicy>
-              </property>
-              <property name="minimum">
-               <number>1024</number>
-              </property>
-              <property name="maximum">
-               <number>65535</number>
-              </property>
-              <property name="value">
-               <number>6667</number>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QCheckBox" name="secureBox">
-              <property name="text">
-               <string>&amp;Secure</string>
-              </property>
-             </widget>
-            </item>
-           </layout>
           </item>
          </layout>
         </widget>
@@ -205,17 +171,10 @@
           <item row="0" column="0">
            <widget class="QLabel" name="nickNameLabel">
             <property name="text">
-             <string>&amp;Nick name:</string>
+             <string>&amp;Nick names:</string>
             </property>
             <property name="buddy">
              <cstring>nickNameField</cstring>
-            </property>
-           </widget>
-          </item>
-          <item row="0" column="1">
-           <widget class="QLineEdit" name="nickNameField">
-            <property name="placeholderText">
-             <string>Communi%1</string>
             </property>
            </widget>
           </item>
@@ -281,6 +240,22 @@
             </item>
            </layout>
           </item>
+          <item row="0" column="1">
+           <widget class="QPlainTextEdit" name="nickNameField">
+            <property name="verticalScrollBarPolicy">
+             <enum>Qt::ScrollBarAlwaysOff</enum>
+            </property>
+            <property name="horizontalScrollBarPolicy">
+             <enum>Qt::ScrollBarAlwaysOff</enum>
+            </property>
+            <property name="tabChangesFocus">
+             <bool>true</bool>
+            </property>
+            <property name="lineWrapMode">
+             <enum>QPlainTextEdit::NoWrap</enum>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
@@ -325,14 +300,13 @@
  </widget>
  <tabstops>
   <tabstop>displayNameField</tabstop>
-  <tabstop>hostField</tabstop>
-  <tabstop>portField</tabstop>
-  <tabstop>secureBox</tabstop>
+  <tabstop>serverField</tabstop>
   <tabstop>nickNameField</tabstop>
   <tabstop>realNameField</tabstop>
   <tabstop>userNameField</tabstop>
   <tabstop>passwordField</tabstop>
-  <tabstop>buttonBox</tabstop>
+  <tabstop>saslBox</tabstop>
+  <tabstop>scrollArea</tabstop>
  </tabstops>
  <resources>
   <include location="../../communi.qrc"/>

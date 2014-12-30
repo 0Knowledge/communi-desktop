@@ -1,6 +1,7 @@
 a { color: #4040ff; }
 .timestamp { color: #808080; font-size: small }
 
+.message { white-space: pre-wrap; }
 .notice { color: #a54242; }
 .action { color: #8b388b; }
 .event { color: #808080; }
@@ -67,14 +68,32 @@ TextShadow {
                                       stop: 0 palette(shadow), stop: 1 transparent);
 }
 
-BusyIndicator {
+TreeSpinner {
     border: none;
     background: transparent;
     min-width: 16px;
     max-width: 16px;
     min-height: 16px;
     max-height: 16px;
-    background-image: url(gray:busy.png);
+    background-image: url(gray:spinner.png);
+}
+
+TreeIndicator {
+    min-width: 6px;
+    max-width: 6px;
+    min-height: 6px;
+    max-height: 6px;
+    border-radius: 2px;
+    border: 1px solid palette(mid);
+}
+
+TreeIndicator:off {
+    background: palette(button);
+}
+
+TreeIndicator:on {
+    background: #ff8888;
+    border-color: #ff8888;
 }
 
 TreeBadge {
@@ -98,7 +117,7 @@ TreeHeader::section:on, TreeWidget::item:on {
     color: #ff4040;
 }
 
-TreeHeader::section:off, TreeWidget::item:off {
+TreeHeader::section:off, TreeWidget::item:off, ListView::item:off {
     color: palette(dark);
 }
 
@@ -203,4 +222,8 @@ AbstractFinder > QToolButton#next {
 AbstractFinder[error="true"] > QToolButton#next {
     image: url(gray:down.png);
     background-color: palette(button);
+}
+
+ConnectPage QPlainTextEdit[error="true"] {
+    background-color: #ff8080;
 }

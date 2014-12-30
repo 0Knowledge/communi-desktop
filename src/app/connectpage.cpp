@@ -1,16 +1,36 @@
 /*
- * Copyright (C) 2008-2014 The Communi Project
- *
- * This example is free, and not covered by the LGPL license. There is no
- * restriction applied to their modification, redistribution, using and so on.
- * You can study them, modify them, use them in your own program - either
- * completely or partially.
- */
+  Copyright (C) 2008-2014 The Communi Project
+
+  You may use this file under the terms of BSD license as follows:
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR
+  ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
 
 #include "connectpage.h"
 #include "simplecrypt.h"
 #include "scrollbarstyle.h"
 #include <QRegExpValidator>
+#include <QStringListModel>
 #include <IrcConnection>
 #include <QStringList>
 #include <QPushButton>
@@ -18,11 +38,14 @@
 #include <QCompleter>
 #include <QSettings>
 #include <QShortcut>
+#include <QRegExp>
 #include <QTime>
 #include <Irc>
 
-static const int SSL_PORTS[] = { 6697, 7000, 7070 };
-static const int NORMAL_PORTS[] = { 6667, 6666, 6665 };
+static QStringList splitLines(const QString& nicks)
+{
+    return nicks.split("\n", QString::SkipEmptyParts);
+}
 
 ConnectPage::ConnectPage(QWidget* parent) : QWidget(parent)
 {
@@ -53,34 +76,21 @@ void ConnectPage::setDisplayName(const QString& name)
     ui.displayNameField->setText(name);
 }
 
-QString ConnectPage::host() const
+QStringList ConnectPage::servers() const
 {
-    return fieldValue(ui.hostField->text(), ui.hostField->placeholderText());
+    QStringList lines = splitLines(ui.serverField->toPlainText());
+#if QT_VERSION >= 0x050300
+    if (lines.isEmpty())
+        lines += ui.serverField->placeholderText();
+#endif // QT_VERSION
+    return lines;
 }
 
-void ConnectPage::setHost(const QString& host)
+void ConnectPage::setServers(const QStringList& servers)
 {
-    ui.hostField->setText(host);
-}
-
-int ConnectPage::port() const
-{
-    return ui.portField->value();
-}
-
-void ConnectPage::setPort(int port)
-{
-    ui.portField->setValue(port);
-}
-
-bool ConnectPage::isSecure() const
-{
-    return ui.secureBox->isChecked();
-}
-
-void ConnectPage::setSecure(bool secure)
-{
-    ui.secureBox->setChecked(secure);
+    ui.serverField->clear();
+    foreach (const QString& line, servers)
+        ui.serverField->appendPlainText(line);
 }
 
 QString ConnectPage::saslMechanism() const
@@ -93,14 +103,21 @@ void ConnectPage::setSaslMechanism(const QString& mechanism)
     ui.saslBox->setChecked(!mechanism.isEmpty());
 }
 
-QString ConnectPage::nickName() const
+QStringList ConnectPage::nickNames() const
 {
-    return fieldValue(ui.nickNameField->text(), ui.nickNameField->placeholderText());
+    QStringList nicks = splitLines(ui.nickNameField->toPlainText());
+#if QT_VERSION >= 0x050300
+    if (nicks.isEmpty())
+        nicks += ui.nickNameField->placeholderText();
+#endif // QT_VERSION
+    return nicks;
 }
 
-void ConnectPage::setNickName(const QString& name)
+void ConnectPage::setNickNames(const QStringList& names)
 {
-    ui.nickNameField->setText(name);
+    ui.nickNameField->clear();
+    foreach (const QString& name, names)
+        ui.nickNameField->appendPlainText(name);
 }
 
 QString ConnectPage::realName() const
@@ -143,63 +160,27 @@ QDialogButtonBox* ConnectPage::buttonBox() const
     return ui.buttonBox;
 }
 
-static QString capitalize(const QString& str)
+bool ConnectPage::eventFilter(QObject* object, QEvent* event)
 {
-    return str.left(1).toUpper() + str.mid(1);
-}
-
-void ConnectPage::onDisplayNameFieldChanged()
-{
-    QString name = ui.displayNameField->text();
-    if (!name.isEmpty() && ui.hostField->text().isEmpty())
-        setHost(defaultValue("hosts", name).toString());
-}
-
-void ConnectPage::onHostFieldChanged()
-{
-    // pick the longest part of the url, skipping the most common domain prefixes and suffixes
-    QString name;
-    QStringList parts = host().split(QLatin1Char('.'), QString::SkipEmptyParts);
-    while (!parts.isEmpty()) {
-        QString part = parts.takeFirst();
-        const QString lower = part.toLower();
-        if (!QString("irc").startsWith(lower) && !QString("org").startsWith(lower)
-                && !QString("net").startsWith(lower) && !QString("com").startsWith(lower)) {
-            if (part.length() > name.length())
-                name = part;
-        }
+    if (event->type() == QEvent::Wheel) {
+        event->ignore();
+        return true;
     }
-    if (!name.isEmpty())
-        ui.displayNameField->setPlaceholderText(capitalize(name));
+    return QWidget::eventFilter(object, event);
+}
 
+void ConnectPage::autoFill()
+{
     QString displayName = ui.displayNameField->text();
-    QString host = ui.hostField->text();
-    if (!displayName.isEmpty() || !host.isEmpty()) {
-        if (port() == NORMAL_PORTS[0])
-            setPort(defaultValue("ports", displayName, defaultValue("ports", host, port()).toInt()).toInt());
-        if (!isSecure())
-            setSecure(defaultValue("secures", displayName, defaultValue("secures", host, isSecure()).toBool()).toBool());
-        if (ui.nickNameField->text().isEmpty())
-            setNickName(defaultValue("nickNames", displayName, defaultValue("nickNames", host).toString()).toString());
+    if (!displayName.isEmpty()) {
+        if (ui.serverField->toPlainText().isEmpty())
+            setServers(splitLines(defaultValue("servers", displayName).toString()));
+        if (ui.nickNameField->toPlainText().isEmpty())
+            setNickNames(splitLines(defaultValue("nickNames", displayName).toString()));
         if (ui.realNameField->text().isEmpty())
-            setRealName(defaultValue("realNames", displayName, defaultValue("realNames", host).toString()).toString());
+            setRealName(defaultValue("realNames", displayName).toString());
         if (ui.userNameField->text().isEmpty())
-            setUserName(defaultValue("userNames", displayName, defaultValue("userNames", host).toString()).toString());
-    }
-}
-
-void ConnectPage::onPortFieldChanged(int port)
-{
-    if (port == SSL_PORTS[0] || port == SSL_PORTS[1] || port == SSL_PORTS[2])
-        ui.secureBox->setChecked(true);
-}
-
-void ConnectPage::onSecureBoxToggled(bool secure)
-{
-    if (secure) {
-        const int port = ui.portField->value();
-        if (port == NORMAL_PORTS[0] || port == NORMAL_PORTS[1] || port == NORMAL_PORTS[2])
-            ui.portField->setValue(SSL_PORTS[0]);
+            setUserName(defaultValue("userNames", displayName).toString());
     }
 }
 
@@ -217,10 +198,8 @@ void ConnectPage::restoreSettings()
     QVariantMap credentials = settings.value("credentials").toMap();
 
     ui.displayNameField->setText(credentials.value("displayName").toString());
-    ui.hostField->setText(credentials.value("host").toString());
-    ui.portField->setValue(credentials.value("port", NORMAL_PORTS[0]).toInt());
-    ui.secureBox->setChecked(credentials.value("secure", false).toBool());
-    ui.nickNameField->setText(credentials.value("nickName").toString());
+    ui.serverField->setPlainText(credentials.value("servers").toString());
+    ui.nickNameField->setPlainText(credentials.value("nickNames").toString());
     ui.realNameField->setText(credentials.value("realName").toString());
     ui.userNameField->setText(credentials.value("userName").toString());
 
@@ -228,8 +207,6 @@ void ConnectPage::restoreSettings()
     ui.passwordField->setText(crypto.decryptToString(credentials.value("password").toString()));
 
     ui.displayNameCompleter = createCompleter(credentials.value("displayNames").toStringList(), ui.displayNameField);
-    ui.hostCompleter = createCompleter(credentials.value("allHosts").toStringList(), ui.hostField);
-    ui.nickNameCompleter = createCompleter(credentials.value("allNickNames").toStringList(), ui.nickNameField);
     ui.realNameCompleter = createCompleter(credentials.value("allRealNames").toStringList(), ui.realNameField);
     ui.userNameCompleter = createCompleter(credentials.value("allUserNames").toStringList(), ui.userNameField);
 }
@@ -237,20 +214,16 @@ void ConnectPage::restoreSettings()
 void ConnectPage::saveSettings()
 {
     const QString displayName = ui.displayNameField->text();
-    const QString host = ui.hostField->text();
-    const int port = ui.portField->value();
-    const bool secure = ui.secureBox->isChecked();
-    const QString nickName = ui.nickNameField->text();
+    const QString servers = ui.serverField->toPlainText();
+    const QString nickNames = ui.nickNameField->toPlainText();
     const QString realName = ui.realNameField->text();
     const QString userName = ui.userNameField->text();
 
     QSettings settings;
     QVariantMap credentials = settings.value("credentials").toMap();
     credentials.insert("displayName", displayName);
-    credentials.insert("host", host);
-    credentials.insert("port", port);
-    credentials.insert("secure", secure);
-    credentials.insert("nickName", nickName);
+    credentials.insert("servers", servers);
+    credentials.insert("nickNames", nickNames);
     credentials.insert("realName", realName);
     credentials.insert("userName", userName);
 
@@ -263,38 +236,15 @@ void ConnectPage::saveSettings()
             credentials.insert("displayNames", displayNames << displayName);
     }
 
-    if (!host.isEmpty()) {
-        QStringList allHosts = credentials.value("allHosts").toStringList();
-        if (!allHosts.contains(host, Qt::CaseInsensitive))
-            credentials.insert("allHosts", allHosts << host);
-
-        QMap<QString, QVariant> hosts = credentials.value("hosts").toMap();
-        hosts.insert(ConnectPage::displayName(), host);
-        credentials.insert("hosts", hosts);
+    if (!servers.isEmpty()) {
+        QMap<QString, QVariant> servers = credentials.value("servers").toMap();
+        servers.insert(ConnectPage::displayName(), servers);
+        credentials.insert("servers", servers);
     }
 
-    if (port != NORMAL_PORTS[0]) {
-        QMap<QString, QVariant> ports = credentials.value("ports").toMap();
-        ports.insert(ConnectPage::displayName(), port);
-        ports.insert(ConnectPage::host(), port);
-        credentials.insert("ports", ports);
-    }
-
-    if (secure) {
-        QMap<QString, QVariant> secures = credentials.value("secures").toMap();
-        secures.insert(ConnectPage::displayName(), secure);
-        secures.insert(ConnectPage::host(), secure);
-        credentials.insert("secures", secures);
-    }
-
-    if (!nickName.isEmpty()) {
-        QStringList allNickNames = credentials.value("allNickNames").toStringList();
-        if (!allNickNames.contains(nickName, Qt::CaseInsensitive))
-            credentials.insert("allNickNames", allNickNames << nickName);
-
+    if (!nickNames.isEmpty()) {
         QMap<QString, QVariant> nickNames = credentials.value("nickNames").toMap();
-        nickNames.insert(ConnectPage::displayName(), nickName);
-        nickNames.insert(ConnectPage::host(), nickName);
+        nickNames.insert(ConnectPage::displayName(), nickNames);
         credentials.insert("nickNames", nickNames);
     }
 
@@ -305,7 +255,6 @@ void ConnectPage::saveSettings()
 
         QMap<QString, QVariant> realNames = credentials.value("realNames").toMap();
         realNames.insert(ConnectPage::displayName(), realName);
-        realNames.insert(ConnectPage::host(), realName);
         credentials.insert("realNames", realNames);
     }
 
@@ -316,7 +265,6 @@ void ConnectPage::saveSettings()
 
         QMap<QString, QVariant> userNames = credentials.value("userNames").toMap();
         userNames.insert(ConnectPage::displayName(), userName);
-        userNames.insert(ConnectPage::host(), userName);
         credentials.insert("userNames", userNames);
     }
 
@@ -325,27 +273,46 @@ void ConnectPage::saveSettings()
 
 void ConnectPage::updateUi()
 {
-    QPushButton* button = ui.buttonBox->button(QDialogButtonBox::Reset);
-    button->setEnabled(!ui.displayNameField->text().isEmpty() ||
-                       !ui.hostField->text().isEmpty() ||
-                        ui.portField->value() != NORMAL_PORTS[0] ||
-                        ui.secureBox->isChecked() ||
-                       !ui.nickNameField->text().isEmpty() ||
-                       !ui.realNameField->text().isEmpty() ||
-                       !ui.userNameField->text().isEmpty() ||
-                       !ui.passwordField->text().isEmpty());
+    int lineSpacing = fontMetrics().lineSpacing();
+    int margin = ui.serverField->document()->documentMargin();
+    ui.serverField->setFixedHeight(qMax(2, ui.serverField->blockCount()) * lineSpacing + 2 * margin);
+    ui.nickNameField->setFixedHeight(qMax(2, ui.nickNameField->blockCount()) * lineSpacing + 2 * margin);
+
+    bool hasName = !displayName().isEmpty();
+    bool hasServer = !servers().isEmpty();
+    bool hasNick = !nickNames().isEmpty();
+    bool hasReal = !realName().isEmpty();
+    bool hasUser = !userName().isEmpty();
+    bool hasPass = !password().isEmpty();
+
+    bool validServers = true;
+    foreach (const QString& server, servers()) {
+        if (!IrcConnection::isValidServer(server))
+            validServers = false;
+    }
+
+    ui.serverField->setProperty("error", !validServers);
+    ui.serverField->setStyleSheet(QString()); // force re-style
+
+    QPushButton* resetButton = ui.buttonBox->button(QDialogButtonBox::Reset);
+    resetButton->setEnabled(hasName || hasServer || hasNick || hasReal || hasUser || hasPass);
+
+    QPushButton* okButton = ui.buttonBox->button(QDialogButtonBox::Ok);
+    okButton->setEnabled(validServers && hasServer && hasNick);
 }
 
 void ConnectPage::reset()
 {
     ui.displayNameField->clear();
-    ui.hostField->clear();
-    ui.portField->setValue(NORMAL_PORTS[0]);
-    ui.secureBox->setChecked(false);
+    ui.serverField->clear();
     ui.nickNameField->clear();
     ui.realNameField->clear();
     ui.userNameField->clear();
     ui.passwordField->clear();
+    ui.displayNameCompleter->setModel(new QStringListModel(ui.displayNameCompleter));
+    ui.realNameCompleter->setModel(new QStringListModel(ui.realNameCompleter));
+    ui.userNameCompleter->setModel(new QStringListModel(ui.userNameCompleter));
+    QSettings().remove("credentials");
     saveSettings();
 }
 
@@ -366,20 +333,25 @@ void ConnectPage::init(IrcConnection *connection)
 
     ui.connection = connection;
     ui.displayNameCompleter = 0;
-    ui.hostCompleter = 0;
     ui.nickNameCompleter = 0;
     ui.realNameCompleter = 0;
     ui.userNameCompleter = 0;
 
     QRegExpValidator* validator = new QRegExpValidator(this);
-    validator->setRegExp(QRegExp("\\S*"));
-    ui.hostField->setValidator(validator);
-    ui.nickNameField->setValidator(validator);
     ui.userNameField->setValidator(validator);
 
-    qsrand(QTime::currentTime().msec());
-    ui.nickNameField->setPlaceholderText(ui.nickNameField->placeholderText().arg(qrand() % 9999));
+    ui.serverField->viewport()->installEventFilter(this);
+    ui.nickNameField->viewport()->installEventFilter(this);
+
     ui.realNameField->setPlaceholderText(ui.realNameField->placeholderText().arg(IRC_VERSION_STR));
+#if QT_VERSION >= 0x050300
+    qsrand(QTime::currentTime().msec());
+    ui.nickNameField->setPlaceholderText(tr("Communi%1").arg(qrand() % 9999));
+    if (IrcConnection::isSecureSupported())
+        ui.serverField->setPlaceholderText(tr("irc.freenode.net +6697"));
+    else
+        ui.serverField->setPlaceholderText(tr("irc.freenode.net 6667"));
+#endif // QT_VERSION
 
     connect(ui.buttonBox, SIGNAL(accepted()), ui.displayNameField, SLOT(setFocus()));
     connect(ui.buttonBox, SIGNAL(rejected()), ui.displayNameField, SLOT(setFocus()));
@@ -388,30 +360,23 @@ void ConnectPage::init(IrcConnection *connection)
     connect(ui.buttonBox, SIGNAL(rejected()), this, SIGNAL(rejected()));
     connect(ui.buttonBox->button(QDialogButtonBox::Reset), SIGNAL(clicked()), this, SLOT(reset()));
 
-    connect(ui.displayNameField, SIGNAL(textChanged(QString)), this, SLOT(onDisplayNameFieldChanged()));
-    connect(ui.hostField, SIGNAL(textChanged(QString)), this, SLOT(onHostFieldChanged()));
-    connect(ui.portField, SIGNAL(valueChanged(int)), this, SLOT(onPortFieldChanged(int)));
-    connect(ui.secureBox, SIGNAL(toggled(bool)), this, SLOT(onSecureBoxToggled(bool)));
+    connect(ui.displayNameField, SIGNAL(textChanged(QString)), this, SLOT(autoFill()));
 
     connect(ui.displayNameField, SIGNAL(textChanged(QString)), this, SLOT(updateUi()));
-    connect(ui.hostField, SIGNAL(textChanged(QString)), this, SLOT(updateUi()));
-    connect(ui.nickNameField, SIGNAL(textChanged(QString)), this, SLOT(updateUi()));
+    connect(ui.serverField, SIGNAL(textChanged()), this, SLOT(updateUi()));
+    connect(ui.nickNameField, SIGNAL(textChanged()), this, SLOT(updateUi()));
     connect(ui.realNameField, SIGNAL(textChanged(QString)), this, SLOT(updateUi()));
     connect(ui.userNameField, SIGNAL(textChanged(QString)), this, SLOT(updateUi()));
     connect(ui.passwordField, SIGNAL(textChanged(QString)), this, SLOT(updateUi()));
-    connect(ui.portField, SIGNAL(valueChanged(int)), this, SLOT(updateUi()));
-    connect(ui.secureBox, SIGNAL(toggled(bool)), this, SLOT(updateUi()));
 
     int labelWidth = 0;
     QList<QLabel*> labels;
-    labels << ui.displayNameLabel << ui.hostLabel << ui.portLabel;
+    labels << ui.displayNameLabel << ui.serverLabel;
     labels << ui.nickNameLabel << ui.realNameLabel << ui.userNameLabel << ui.passwordLabel;
     foreach (QLabel* label, labels)
         labelWidth = qMax(labelWidth, label->sizeHint().width());
     foreach (QLabel* label, labels)
         label->setMinimumWidth(labelWidth);
-
-    ui.secureBox->setEnabled(IrcConnection::isSecureSupported());
 
     QShortcut* shortcut = new QShortcut(Qt::Key_Return, this);
     connect(shortcut, SIGNAL(activated()), ui.buttonBox->button(QDialogButtonBox::Ok), SLOT(click()));
